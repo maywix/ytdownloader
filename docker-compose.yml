@@ -1,0 +1,12 @@
+services:
+  ytdown:
+    build: .
+    container_name: ytdown
+    ports:
+      - "8080:8080"
+    volumes:
+      # Les fichiers téléchargés survivent aux redémarrages
+      - ./downloads:/app/downloads
+    restart: always
+    environment:
+      - PYTHONUNBUFFERED=1
