@@ -1,149 +1,188 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>YTDown</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YTDown — Téléchargeur Vidéo & Musique FLAC</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+
   <div class="app">
 
+    <!-- ── En-tête ── -->
     <header>
       <div class="header-top">
-        <div class="logo">YTDown</div>
-        <div id="version-badge" class="version-badge" title="yt-dlp version">
-          <span id="version-dot" class="version-dot"></span>
-          <span id="version-text">yt-dlp …</span>
+        <h1 class="logo">YTDown <span style="font-size:16px; font-weight:400; color:var(--muted2); font-style:italic;">SpotiFLAC</span></h1>
+        <div class="version-badge hidden" id="version-badge">
+          <span class="version-dot"></span>
+          <span id="v-text">yt-dlp</span>
         </div>
       </div>
-      <p class="tagline">Téléchargez n'importe quel contenu vidéo ou audio</p>
+      <p style="color: var(--muted2); font-size: 14px;">Téléchargez des vidéos 4K & des morceaux ou albums de musique en FLAC / MP3</p>
     </header>
 
     <main>
 
-      <!-- URL input -->
-      <div class="input-row">
-        <input
-          type="text"
-          id="url-input"
-          placeholder="Colle un lien YouTube, TikTok, Instagram, SoundCloud..."
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <button id="fetch-btn">
-          <span id="btn-label">Analyser</span>
-          <span id="btn-spinner" class="hidden">...</span>
-        </button>
+      <!-- ── Onglets de Mode ── -->
+      <div class="mode-tabs" style="display: flex; gap: 8px; margin-bottom: 20px;">
+        <button class="mode-tab active" id="tab-url-btn" data-mode="url" style="padding: 10px 18px; border: 1px solid var(--border2); background: transparent; color: #fff; font-family: inherit; font-size: 13px; font-weight: 600; border-radius: 4px; cursor: pointer;">Lien vidéo / playlist / Spotify</button>
+        <button class="mode-tab" id="tab-search-btn" data-mode="search" style="padding: 10px 18px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-family: inherit; font-size: 13px; font-weight: 500; border-radius: 4px; cursor: pointer;">Recherche musique par mot-clé</button>
       </div>
 
-      <!-- Auto-download toggle -->
-      <label class="auto-dl-row">
-        <input type="checkbox" id="auto-dl-chk" />
-        <span>Télécharger automatiquement à la fin</span>
-      </label>
+      <!-- Mode 1 : URL (Vidéo / Playlist / Spotify Album / Track) -->
+      <section id="sec-url" class="mode-sec">
+        <div class="input-row">
+          <input type="text" id="url-input" placeholder="Colle un lien (YouTube, TikTok, Instagram, Spotify...) ou tape une recherche" autocomplete="off" spellcheck="false">
+          <button id="fetch-btn">
+            <span id="btn-label">Analyser</span>
+            <span id="btn-spinner" class="spinner hidden"></span>
+          </button>
+        </div>
 
-      <!-- Error -->
+        <div id="url-search-results" class="results-grid hidden" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px;"></div>
+
+        <div class="auto-dl-row">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="checkbox" id="auto-dl-chk" checked>
+            <span>Télécharger automatiquement à la fin</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- Mode 2 : Recherche de Musique par mot-clé -->
+      <section id="sec-search" class="mode-sec hidden">
+        <div class="input-row">
+          <input type="text" id="music-input" placeholder="Rechercher par mot-clé (Titre, artiste, groupe)..." autocomplete="off">
+          <button id="music-search-btn">
+            <span id="music-btn-label">Rechercher</span>
+            <span id="music-btn-spinner" class="spinner hidden"></span>
+          </button>
+        </div>
+
+        <div class="music-sources" style="display: flex; gap: 6px; margin: 12px 0 4px;">
+          <button class="src-chip active" data-src="youtube" style="padding: 6px 14px; border: 1px solid #fff; background: #fff; color: #000; font-size: 12px; font-weight: 600; border-radius: 3px; cursor: pointer;">YouTube</button>
+          <button class="src-chip" data-src="spotify" style="padding: 6px 14px; border: 1px solid var(--border2); background: transparent; color: var(--muted2); font-size: 12px; font-weight: 500; border-radius: 3px; cursor: pointer;">Spotify</button>
+          <button class="src-chip" data-src="soundcloud" style="padding: 6px 14px; border: 1px solid var(--border2); background: transparent; color: var(--muted2); font-size: 12px; font-weight: 500; border-radius: 3px; cursor: pointer;">SoundCloud</button>
+        </div>
+
+        <div id="music-results" class="results-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 12px;"></div>
+        <div id="music-error" class="error hidden" style="margin-top: 12px;"></div>
+      </section>
+
       <div id="error-msg" class="error hidden"></div>
 
-      <!-- ── Single video card ── -->
-      <div id="video-card" class="card hidden">
-        <div class="thumb-wrap">
-          <img id="v-thumb" src="" alt="" />
-          <span id="v-duration" class="badge"></span>
-          <button id="thumb-btn" class="thumb-btn">↓ Miniature</button>
+      <!-- CARTE SPOTIFLAC / ALBUM SPOTIFY -->
+      <div id="spoti-card" class="card hidden">
+        <div class="thumb-wrap" style="aspect-ratio: 1/1; max-width: 240px; margin: 20px auto 0; border-radius: 4px;">
+          <img id="spoti-cover" src="" alt="Cover">
+          <span id="spoti-badge" class="badge badge-playlist">ALBUM</span>
         </div>
         <div class="card-body">
           <div class="meta-top">
-            <h2 id="v-title"></h2>
-            <p class="meta-sub"><span id="v-channel"></span><span class="sep" id="v-views-sep">·</span><span id="v-views"></span></p>
+            <h2 id="spoti-title"></h2>
+            <p id="spoti-artist" class="meta-sub"></p>
+          </div>
+
+          <div class="label">Format de téléchargement SpotiFLAC</div>
+          <div class="fmt-tabs" id="spoti-fmt-tabs">
+            <button class="fmt-tab active" data-spoti-fmt="flac">FLAC HD (Lossless)</button>
+            <button class="fmt-tab" data-spoti-fmt="mp3">MP3 320k</button>
+            <button class="fmt-tab" data-spoti-fmt="m4a">M4A 256k</button>
+          </div>
+
+          <div id="spoti-track-list-wrap" style="margin-top: 8px; border-top: 1px solid var(--border); padding-top: 12px;">
+            <div class="label" style="margin-bottom: 8px;">Pistes incluses (<span id="spoti-count">0</span>)</div>
+            <div id="spoti-track-list" style="max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted2);"></div>
+          </div>
+
+          <button id="spoti-dl-btn" class="dl-btn">Télécharger l'Album complet (.zip)</button>
+        </div>
+      </div>
+
+      <!-- CARTE VIDÉO UNIQUE -->
+      <div id="video-card" class="card hidden">
+        <div class="thumb-wrap">
+          <img id="video-thumb" src="" alt="">
+          <span id="video-duration" class="badge"></span>
+          <button id="thumb-btn" class="thumb-btn">Miniature</button>
+        </div>
+        <div class="card-body">
+          <div class="meta-top">
+            <h2 id="video-title"></h2>
+            <p class="meta-sub">
+              <span id="video-channel"></span>
+              <span class="sep">•</span>
+              <span id="video-views"></span>
+            </p>
           </div>
 
           <div class="label">Format</div>
           <div class="fmt-tabs" id="fmt-tabs">
-            <button class="fmt-tab fmt-optimal active" data-fmt="best">Optimal</button>
-            <button class="fmt-tab" data-fmt="mp4">MP4</button>
-            <button class="fmt-tab" data-fmt="mkv">MKV</button>
+            <button class="fmt-tab active" data-fmt="mp4">MP4</button>
             <button class="fmt-tab" data-fmt="mp3">MP3</button>
+            <button class="fmt-tab" data-fmt="flac">FLAC</button>
             <button class="fmt-tab" data-fmt="m4a">M4A</button>
+            <button class="fmt-tab" data-fmt="mkv">MKV</button>
+            <button class="fmt-tab fmt-optimal" data-fmt="best">Optimal</button>
           </div>
 
-          <div class="label hidden" id="q-label">Qualité</div>
-
-          <div class="q-grid hidden" id="q-video">
-            <button class="q-btn" data-q="360">360p</button>
-            <button class="q-btn" data-q="480">480p</button>
-            <button class="q-btn" data-q="720">720p</button>
-            <button class="q-btn" data-q="1080">1080p</button>
-            <button class="q-btn" data-q="2k">2K</button>
-            <button class="q-btn" data-q="4k">4K</button>
-            <button class="q-btn" data-q="8k">8K</button>
-          </div>
-          <div class="q-grid hidden" id="q-audio">
-            <button class="q-btn" data-q="128">128 kbps</button>
-            <button class="q-btn active" data-q="256">256 kbps</button>
+          <div id="quality-section">
+            <div class="label">Qualité maximale</div>
+            <div class="q-grid" id="q-grid">
+              <button class="q-btn active" data-q="1080">1080p</button>
+              <button class="q-btn" data-q="720">720p</button>
+              <button class="q-btn" data-q="480">480p</button>
+              <button class="q-btn" data-q="4k">4K</button>
+            </div>
           </div>
 
-          <button class="dl-btn" id="dl-btn">Télécharger</button>
+          <button id="dl-btn" class="dl-btn">Télécharger</button>
         </div>
       </div>
 
-      <!-- ── Playlist / channel card ── -->
+      <!-- CARTE PLAYLIST -->
       <div id="playlist-card" class="card hidden">
         <div class="thumb-wrap">
-          <img id="p-thumb" src="" alt="" />
-          <span class="badge badge-playlist" id="p-count"></span>
+          <img id="p-thumb" src="" alt="">
+          <span id="p-count" class="badge badge-playlist">PLAYLIST</span>
         </div>
         <div class="card-body">
           <div class="meta-top">
             <h2 id="p-title"></h2>
-            <p class="meta-sub" id="p-channel"></p>
+            <p id="p-channel" class="meta-sub"></p>
           </div>
 
           <div class="label">Format</div>
           <div class="fmt-tabs" id="p-fmt-tabs">
-            <button class="fmt-tab fmt-optimal active" data-fmt="best">Optimal</button>
-            <button class="fmt-tab" data-fmt="mp4">MP4</button>
-            <button class="fmt-tab" data-fmt="mkv">MKV</button>
+            <button class="fmt-tab active" data-fmt="mp4">MP4</button>
             <button class="fmt-tab" data-fmt="mp3">MP3</button>
-            <button class="fmt-tab" data-fmt="m4a">M4A</button>
+            <button class="fmt-tab" data-fmt="flac">FLAC</button>
           </div>
 
-          <div class="label hidden" id="pq-label">Qualité</div>
-
-          <div class="q-grid hidden" id="pq-video">
-            <button class="q-btn" data-q="360">360p</button>
-            <button class="q-btn" data-q="480">480p</button>
-            <button class="q-btn" data-q="720">720p</button>
-            <button class="q-btn" data-q="1080">1080p</button>
-            <button class="q-btn" data-q="2k">2K</button>
-            <button class="q-btn" data-q="4k">4K</button>
-            <button class="q-btn" data-q="8k">8K</button>
-          </div>
-          <div class="q-grid hidden" id="pq-audio">
-            <button class="q-btn" data-q="128">128 kbps</button>
-            <button class="q-btn active" data-q="256">256 kbps</button>
-          </div>
-
-          <button class="dl-btn" id="p-dl-btn">Tout télécharger</button>
+          <button id="p-dl-btn" class="dl-btn">Tout télécharger (.zip)</button>
         </div>
       </div>
 
-      <!-- Progress -->
+      <!-- CARTE PROGRESSION -->
       <div id="progress-card" class="card hidden">
         <div class="prog-head">
           <span id="prog-label">Démarrage...</span>
           <span id="prog-pct">0%</span>
         </div>
-        <div class="prog-track"><div id="prog-fill" class="prog-fill"></div></div>
+        <div class="prog-track">
+          <div id="prog-fill" class="prog-fill"></div>
+        </div>
         <div class="prog-meta">
-          <span id="prog-speed"></span>
-          <span id="prog-eta"></span>
           <span id="prog-current"></span>
+          <div>
+            <span id="prog-speed"></span>
+            <span id="prog-eta" style="margin-left: 8px;"></span>
+          </div>
         </div>
       </div>
 
-      <!-- Done -->
+      <!-- CARTE TERMINÉ -->
       <div id="done-card" class="card done-card hidden">
         <span class="done-check">✓</span>
         <div class="done-info">
@@ -159,77 +198,12 @@
     <footer>
       <p class="compat-label">Compatible avec</p>
       <div class="services">
-
-        <div class="svc" title="YouTube">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-          </svg>
-          <span>YouTube</span>
-        </div>
-
-        <div class="svc" title="TikTok">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.33 6.33 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.33-6.34V8.69a8.27 8.27 0 0 0 4.83 1.55V6.79a4.85 4.85 0 0 1-1.06-.1z"/>
-          </svg>
-          <span>TikTok</span>
-        </div>
-
-        <div class="svc" title="Instagram">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
-          </svg>
-          <span>Instagram</span>
-        </div>
-
-        <div class="svc" title="Facebook">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-          </svg>
-          <span>Facebook</span>
-        </div>
-
-        <div class="svc" title="SoundCloud">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M1.175 12.225c-.015 0-.023.01-.023.025v1.65c0 .015.008.025.023.025s.023-.01.023-.025v-1.65c0-.015-.008-.025-.023-.025zm.8-.3c-.015 0-.023.01-.023.025v2.25c0 .015.008.025.023.025s.023-.01.023-.025v-2.25c0-.015-.008-.025-.023-.025zm.8-.2c-.015 0-.023.01-.023.025v2.65c0 .015.008.025.023.025s.023-.01.023-.025v-2.65c0-.015-.008-.025-.023-.025zm.8.35c-.015 0-.023.01-.023.025v1.95c0 .015.008.025.023.025s.023-.01.023-.025v-1.95c0-.015-.008-.025-.023-.025zm.8-.5c-.015 0-.023.01-.023.025v2.95c0 .015.008.025.023.025s.023-.01.023-.025v-2.95c0-.015-.008-.025-.023-.025zm.8.2c-.015 0-.023.01-.023.025v2.55c0 .015.008.025.023.025s.023-.01.023-.025v-2.55c0-.015-.008-.025-.023-.025zm.8-1.15c-.015 0-.023.01-.023.025v3.7c0 .015.008.025.023.025s.023-.01.023-.025v-3.7c0-.015-.008-.025-.023-.025zm.8-.4c-.015 0-.023.01-.023.025v4.5c0 .015.008.025.023.025s.023-.01.023-.025v-4.5c0-.015-.008-.025-.023-.025zM8.17 10.8c-.46 0-.9.1-1.3.27-.22-2.03-1.9-3.62-3.97-3.62-.99 0-1.9.37-2.58.97v7.05c0 .43.35.78.78.78H8.17c1.27 0 2.3-1.03 2.3-2.3s-1.03-2.15-2.3-2.15z"/>
-          </svg>
-          <span>SoundCloud</span>
-        </div>
-
-        <div class="svc" title="Twitch">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/>
-          </svg>
-          <span>Twitch</span>
-        </div>
-
-        <div class="svc" title="Twitter / X">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
-          </svg>
-          <span>Twitter / X</span>
-        </div>
-
-        <div class="svc" title="Vimeo">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M23.977 6.416c-.105 2.338-1.739 5.543-4.894 9.609-3.268 4.247-6.026 6.37-8.29 6.37-1.409 0-2.578-1.294-3.553-3.881L5.322 11.4C4.603 8.816 3.834 7.522 3.01 7.522c-.179 0-.806.378-1.881 1.132L0 7.197c1.185-1.044 2.351-2.088 3.501-3.132 1.879-1.602 3.936-2.35 4.917-1.745.987.534 1.604 2.305 2.233 4.949l.758 3.079c.786 3.576 1.648 5.366 2.587 5.366.737 0 1.838-1.162 3.307-3.485 1.467-2.321 2.254-4.093 2.357-5.312.208-2.011-.572-3.017-2.357-3.017-.84 0-1.707.194-2.589.572 1.719-5.633 5.001-8.373 9.847-8.205 3.597.144 5.291 2.442 5.097 6.891z"/>
-          </svg>
-          <span>Vimeo</span>
-        </div>
-
-        <div class="svc" title="Reddit">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 0 1-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .716-.435 1.333-1.01 1.614a3.111 3.111 0 0 1 .042.52c0 2.694-3.13 4.87-7.004 4.87-3.874 0-7.004-2.176-7.004-4.87 0-.183.015-.366.043-.534A1.748 1.748 0 0 1 4.028 12c0-.968.786-1.754 1.754-1.754.463 0 .898.196 1.207.49 1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 0 1 .14-.197.35.35 0 0 1 .238-.042l2.906.617a1.214 1.214 0 0 1 1.108-.701zM9.25 12C8.561 12 8 12.562 8 13.25c0 .687.561 1.248 1.25 1.248.687 0 1.248-.561 1.248-1.249 0-.688-.561-1.249-1.249-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25 0 .687.561 1.248 1.249 1.248.688 0 1.249-.561 1.249-1.249 0-.687-.562-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 0 0-.231.094.33.33 0 0 0 0 .463c.842.842 2.484.913 2.961.913.477 0 2.105-.056 2.961-.913a.361.361 0 0 0 .029-.463.33.33 0 0 0-.464 0c-.547.533-1.684.73-2.512.73-.828 0-1.979-.196-2.512-.73a.326.326 0 0 0-.232-.095z"/>
-          </svg>
-          <span>Reddit</span>
-        </div>
-
-        <div class="svc" title="Dailymotion">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12.712 0C5.686 0 0 5.686 0 12.712c0 7.026 5.686 11.288 12.712 11.288 7.025 0 11.288-4.262 11.288-11.288C24 5.686 18.737 0 12.712 0zm3.73 15.441c-.826.548-1.761.822-2.805.822-.965 0-1.854-.244-2.668-.733-.814-.488-1.456-1.148-1.927-1.98-.471-.83-.706-1.746-.706-2.748 0-1.002.235-1.918.706-2.748.471-.83 1.113-1.49 1.927-1.98.814-.488 1.703-.733 2.668-.733 1.044 0 1.979.274 2.805.822.826.548 1.456 1.281 1.892 2.198H17.1c-.314-.627-.745-1.113-1.294-1.456-.549-.344-1.162-.515-1.84-.515-.671 0-1.281.184-1.83.553-.548.368-.979.871-1.293 1.51-.314.638-.471 1.34-.471 2.103 0 .765.157 1.466.471 2.104.314.638.745 1.14 1.293 1.51.549.369 1.159.553 1.83.553.678 0 1.291-.171 1.84-.515.549-.344.98-.829 1.294-1.456h1.524c-.436.917-1.066 1.65-1.892 2.198z"/>
-          </svg>
-          <span>Dailymotion</span>
-        </div>
-
+        <div class="svc" title="Spotify"><span>Spotify</span></div>
+        <div class="svc" title="YouTube"><span>YouTube</span></div>
+        <div class="svc" title="TikTok"><span>TikTok</span></div>
+        <div class="svc" title="Instagram"><span>Instagram</span></div>
+        <div class="svc" title="SoundCloud"><span>SoundCloud</span></div>
+        <div class="svc" title="Facebook"><span>Facebook</span></div>
       </div>
     </footer>
 

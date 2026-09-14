@@ -8,5 +8,7 @@ services:
       # Les fichiers téléchargés survivent aux redémarrages
       - ./downloads:/app/downloads
     restart: always
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1

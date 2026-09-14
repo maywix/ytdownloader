@@ -1,447 +1,461 @@
-'use strict';
+document.addEventListener('DOMContentLoaded', () => {
 
-const $ = id => document.getElementById(id);
+  // ── Mode Tabs (URL vs Search) ──
+  const modeTabs = document.querySelectorAll('.mode-tab');
+  const secUrl = document.getElementById('sec-url');
+  const secSearch = document.getElementById('sec-search');
 
-const urlInput     = $('url-input');
-const fetchBtn     = $('fetch-btn');
-const btnLabel     = $('btn-label');
-const btnSpinner   = $('btn-spinner');
-const errorMsg     = $('error-msg');
-const videoCard    = $('video-card');
-const playlistCard = $('playlist-card');
-const progressCard = $('progress-card');
-const doneCard     = $('done-card');
-
-const vThumb    = $('v-thumb');
-const vDuration = $('v-duration');
-const vTitle    = $('v-title');
-const vChannel  = $('v-channel');
-const vViews    = $('v-views');
-const thumbBtn  = $('thumb-btn');
-const dlBtn     = $('dl-btn');
-
-const pThumb   = $('p-thumb');
-const pCount   = $('p-count');
-const pTitle   = $('p-title');
-const pChannel = $('p-channel');
-const pDlBtn   = $('p-dl-btn');
-
-const progFill    = $('prog-fill');
-const progPct     = $('prog-pct');
-const progLabel   = $('prog-label');
-const progSpeed   = $('prog-speed');
-const progEta     = $('prog-eta');
-const progCurrent = $('prog-current');
-const doneName    = $('done-name');
-const saveLink    = $('save-link');
-const autoDlChk   = $('auto-dl-chk');
-
-// Persist auto-download preference
-autoDlChk.checked = localStorage.getItem('auto-dl') === '1';
-autoDlChk.addEventListener('change', () => {
-  localStorage.setItem('auto-dl', autoDlChk.checked ? '1' : '0');
-});
-
-// Resolution to pixel height mapping
-const HEIGHT_MAP = {
-  '360': 360, '480': 480, '720': 720,
-  '1080': 1080, '2k': 1440, '4k': 2160, '8k': 4320,
-};
-
-// State
-let currentUrl  = '';
-let curFmt      = 'best';
-let curQ        = '1080';
-let pCurFmt     = 'best';
-let pCurQ       = '1080';
-let pollTimer   = null;
-let currentMode = 'single';
-
-// ── Version badge ─────────────────────────────────────────────
-
-const versionDot  = $('version-dot');
-const versionText = $('version-text');
-
-async function fetchVersion() {
-  try {
-    const res  = await fetch('/api/version');
-    const data = await res.json();
-    const v    = data.version || '?';
-    versionDot.className  = 'version-dot ' + (data.status || '');
-    let label = `yt-dlp ${v}`;
-    if (data.status === 'checking') label += ' (mise à jour…)';
-    const next = data.next_check ? new Date(data.next_check) : null;
-    if (next && data.status !== 'checking') {
-      const h = Math.round((next - Date.now()) / 3600000);
-      if (h > 0) label += ` · prochaine vérif. dans ${h}h`;
-    }
-    versionText.textContent = label;
-    // Si en cours de vérif, repoll dans 5s
-    if (data.status === 'checking') setTimeout(fetchVersion, 5000);
-  } catch { /* silencieux */ }
-}
-
-fetchVersion();
-
-// ── Format/quality grid handlers ──────────────────────────────
-
-function applyFmtChange(fmt, videoQId, audioQId, qLabelId, setter) {
-  setter(fmt);
-  const vQ = $(videoQId);
-  const aQ = $(audioQId);
-  const lbl = $(qLabelId);
-
-  if (fmt === 'best') {
-    // Optimal: no quality selector
-    vQ.classList.add('hidden');
-    aQ.classList.add('hidden');
-    lbl.classList.add('hidden');
-  } else if (fmt === 'mp4' || fmt === 'mkv') {
-    vQ.classList.remove('hidden');
-    aQ.classList.add('hidden');
-    lbl.classList.remove('hidden');
-  } else if (fmt === 'mp3') {
-    vQ.classList.add('hidden');
-    aQ.classList.remove('hidden');
-    lbl.classList.remove('hidden');
-  } else { // m4a
-    vQ.classList.add('hidden');
-    aQ.classList.add('hidden');
-    lbl.classList.add('hidden');
-  }
-}
-
-function setupFmtTabs(tabsId, videoQId, audioQId, qLabelId, setter) {
-  document.querySelectorAll(`#${tabsId} .fmt-tab`).forEach(tab => {
+  modeTabs.forEach(tab => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll(`#${tabsId} .fmt-tab`).forEach(t => t.classList.remove('active'));
+      modeTabs.forEach(t => {
+        t.classList.remove('active');
+        t.style.borderColor = 'var(--border)';
+        t.style.color = 'var(--muted)';
+      });
       tab.classList.add('active');
-      applyFmtChange(tab.dataset.fmt, videoQId, audioQId, qLabelId, setter);
+      tab.style.borderColor = 'var(--border2)';
+      tab.style.color = '#fff';
+
+      const mode = tab.dataset.mode;
+      secUrl.classList.toggle('hidden', mode !== 'url');
+      secSearch.classList.toggle('hidden', mode !== 'search');
     });
   });
-}
 
-function setupQBtns(gridId, setter) {
-  document.querySelectorAll(`#${gridId} .q-btn`).forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (btn.disabled) return;
-      document.querySelectorAll(`#${gridId} .q-btn`).forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      setter(btn.dataset.q);
-    });
-  });
-}
+  // ── URL Mode ──
+  const urlInput = document.getElementById('url-input');
+  const fetchBtn = document.getElementById('fetch-btn');
+  const btnLabel = document.getElementById('btn-label');
+  const btnSpinner = document.getElementById('btn-spinner');
+  const autoDlChk = document.getElementById('auto-dl-chk');
 
-setupFmtTabs('fmt-tabs', 'q-video', 'q-audio', 'q-label', f => { curFmt = f; });
-setupQBtns('q-video', q => { curQ = q; });
-setupQBtns('q-audio', q => { curQ = q; });
+  const urlSearchResults = document.getElementById('url-search-results');
 
-setupFmtTabs('p-fmt-tabs', 'pq-video', 'pq-audio', 'pq-label', f => { pCurFmt = f; });
-setupQBtns('pq-video', q => { pCurQ = q; });
-setupQBtns('pq-audio', q => { pCurQ = q; });
+  const videoCard = document.getElementById('video-card');
+  const playlistCard = document.getElementById('playlist-card');
+  const spotiCard = document.getElementById('spoti-card');
+  const progressCard = document.getElementById('progress-card');
+  const doneCard = document.getElementById('done-card');
+  const errorMsg = document.getElementById('error-msg');
 
-// ── Limit quality grid to video's actual max resolution ───────
+  // Video Card Elements
+  const videoThumb = document.getElementById('video-thumb');
+  const videoTitle = document.getElementById('video-title');
+  const videoChannel = document.getElementById('video-channel');
+  const videoViews = document.getElementById('video-views');
+  const videoDuration = document.getElementById('video-duration');
+  const dlBtn = document.getElementById('dl-btn');
+  const thumbBtn = document.getElementById('thumb-btn');
 
-function limitQualities(gridId, maxHeight, qSetter) {
-  if (!maxHeight) return;
+  // Playlist Card Elements
+  const pThumb = document.getElementById('p-thumb');
+  const pTitle = document.getElementById('p-title');
+  const pChannel = document.getElementById('p-channel');
+  const pCount = document.getElementById('p-count');
+  const pDlBtn = document.getElementById('p-dl-btn');
 
-  let bestBtn = null;
+  // SpotiFLAC Card Elements
+  const spotiCover = document.getElementById('spoti-cover');
+  const spotiBadge = document.getElementById('spoti-badge');
+  const spotiTitle = document.getElementById('spoti-title');
+  const spotiArtist = document.getElementById('spoti-artist');
+  const spotiCount = document.getElementById('spoti-count');
+  const spotiTrackList = document.getElementById('spoti-track-list');
+  const spotiDlBtn = document.getElementById('spoti-dl-btn');
 
-  document.querySelectorAll(`#${gridId} .q-btn`).forEach(btn => {
-    const h = HEIGHT_MAP[btn.dataset.q] || 0;
-    if (h > maxHeight) {
-      btn.disabled = true;
-      btn.classList.remove('active');
-    } else {
-      btn.disabled = false;
-      if (!bestBtn || h > (HEIGHT_MAP[bestBtn.dataset.q] || 0)) {
-        bestBtn = btn;
-      }
-    }
-  });
+  let currentUrl = '';
+  let curFmt = 'mp4';
+  let curQ = '1080';
+  let pCurFmt = 'mp4';
+  let spotiFmt = 'flac';
+  let currentSpotiData = null;
 
-  // Auto-select best available quality
-  if (bestBtn) {
-    document.querySelectorAll(`#${gridId} .q-btn`).forEach(b => b.classList.remove('active'));
-    bestBtn.classList.add('active');
-    qSetter(bestBtn.dataset.q);
-  }
-}
+  fetchBtn.addEventListener('click', runFetch);
+  urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') runFetch(); });
 
-// ── Switch to audio-only mode (SoundCloud etc.) ───────────────
-
-function switchToAudioOnly(tabsId, videoQId, audioQId, qLabelId, fmtSetter, qSetter) {
-  // Hide video format tabs (Optimal, MP4, MKV)
-  const tabs = document.querySelectorAll(`#${tabsId} .fmt-tab`);
-  tabs.forEach(tab => {
-    const fmt = tab.dataset.fmt;
-    if (fmt === 'best' || fmt === 'mp4' || fmt === 'mkv') {
-      tab.classList.add('unavailable');
-      tab.classList.remove('active');
-    }
-  });
-
-  // Activate MP3 by default
-  const mp3Tab = document.querySelector(`#${tabsId} [data-fmt="mp3"]`);
-  if (mp3Tab) {
-    mp3Tab.classList.add('active');
-    applyFmtChange('mp3', videoQId, audioQId, qLabelId, fmtSetter);
+  function isUrl(s) {
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(s);
   }
 
-  // Auto-select 256 kbps
-  const audioGrid = audioQId === 'q-audio' ? 'q-audio' : 'pq-audio';
-  const btn256 = document.querySelector(`#${audioGrid} [data-q="256"]`);
-  if (btn256) {
-    document.querySelectorAll(`#${audioGrid} .q-btn`).forEach(b => b.classList.remove('active'));
-    btn256.classList.add('active');
-    qSetter('256');
-  }
-}
+  async function runFetch() {
+    const raw = urlInput.value.trim();
+    if (!raw) return;
 
-// ── Fetch info ────────────────────────────────────────────────
+    hideAllCards();
+    hide(urlSearchResults);
+    setLoading(true);
 
-fetchBtn.addEventListener('click', fetchInfo);
-urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') fetchInfo(); });
-
-async function fetchInfo() {
-  const url = urlInput.value.trim();
-  if (!url) return;
-
-  currentUrl = url;
-  setLoading(true);
-  hideAll();
-
-  try {
-    const res  = await fetch(`/api/info?url=${encodeURIComponent(url)}`);
-    const data = await res.json();
-
-    if (!res.ok || data.error) { showError(data.error || 'Erreur'); return; }
-
-    if (data.type === 'playlist') {
-      currentMode = 'playlist';
-      pThumb.src = data.thumbnail || '';
-      pCount.textContent = `${data.count} vidéos`;
-      pTitle.textContent = data.title;
-      pChannel.textContent = data.channel;
-      pThumb.parentElement.style.display = data.thumbnail ? '' : 'none';
-
-      // Reset format tabs for playlist
-      resetFmtTabs('p-fmt-tabs', 'pq-video', 'pq-audio', 'pq-label', f => { pCurFmt = f; });
-
-      if (data.audio_only) {
-        switchToAudioOnly('p-fmt-tabs', 'pq-video', 'pq-audio', 'pq-label',
-          f => { pCurFmt = f; }, q => { pCurQ = q; });
-      }
-
-      show(playlistCard);
-
-    } else {
-      currentMode = 'single';
-      vThumb.src            = data.thumbnail;
-      vDuration.textContent = data.duration;
-      vTitle.textContent    = data.title;
-      vChannel.textContent  = data.channel;
-      vViews.textContent    = data.views;
-      $('v-views-sep').style.display = data.views ? '' : 'none';
-
-      // Reset format tabs
-      resetFmtTabs('fmt-tabs', 'q-video', 'q-audio', 'q-label', f => { curFmt = f; });
-
-      if (data.audio_only) {
-        switchToAudioOnly('fmt-tabs', 'q-video', 'q-audio', 'q-label',
-          f => { curFmt = f; }, q => { curQ = q; });
-      } else if (data.max_height) {
-        // Limit quality buttons to video's actual max
-        limitQualities('q-video', data.max_height, q => { curQ = q; });
-      }
-
-      show(videoCard);
-    }
-
-  } catch { showError('Serveur inaccessible — lance app.py d\'abord'); }
-  finally  { setLoading(false); }
-}
-
-// Reset format tabs to default state (Optimal selected, no quality shown)
-function resetFmtTabs(tabsId, videoQId, audioQId, qLabelId, setter) {
-  document.querySelectorAll(`#${tabsId} .fmt-tab`).forEach(t => {
-    t.classList.remove('active', 'unavailable');
-  });
-  const optimalTab = document.querySelector(`#${tabsId} [data-fmt="best"]`);
-  if (optimalTab) optimalTab.classList.add('active');
-  setter('best');
-  applyFmtChange('best', videoQId, audioQId, qLabelId, setter);
-
-  // Re-enable all quality buttons
-  document.querySelectorAll(`#${videoQId} .q-btn`).forEach(b => { b.disabled = false; });
-}
-
-// ── Thumbnail ─────────────────────────────────────────────────
-
-thumbBtn.addEventListener('click', async () => {
-  thumbBtn.disabled = true;
-  const orig = thumbBtn.textContent;
-  thumbBtn.textContent = '...';
-
-  try {
-    const res = await fetch('/api/thumbnail', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: currentUrl }),
-    });
-    if (!res.ok) { const d = await res.json(); showError(d.error); return; }
-    const blob = await res.blob();
-    const cd   = res.headers.get('Content-Disposition') || '';
-    const m    = cd.match(/filename="([^"]+)"/);
-    triggerDl(URL.createObjectURL(blob), m ? m[1] : 'thumbnail.jpg');
-  } catch { showError('Erreur miniature'); }
-  finally  { thumbBtn.disabled = false; thumbBtn.textContent = orig; }
-});
-
-// ── Download ──────────────────────────────────────────────────
-
-dlBtn.addEventListener('click', () => startDownload('single', curFmt, curQ));
-pDlBtn.addEventListener('click', () => startDownload('playlist', pCurFmt, pCurQ));
-
-async function startDownload(mode, fmt, quality) {
-  const btn = mode === 'playlist' ? pDlBtn : dlBtn;
-  btn.disabled = true;
-  hideCards(progressCard, doneCard, errorMsg);
-  resetProgress();
-  show(progressCard);
-
-  try {
-    const res  = await fetch('/api/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: currentUrl, format: fmt, quality, mode }),
-    });
-    const data = await res.json();
-
-    if (!res.ok || data.error) {
-      showError(data.error || 'Erreur');
-      hide(progressCard);
-      btn.disabled = false;
+    // Texte simple (pas un lien) → recherche YouTube par mot-clé
+    if (!isUrl(raw)) {
+      await runUrlSearch(raw);
+      setLoading(false);
       return;
     }
 
-    poll(data.download_id, btn);
+    currentUrl = raw;
 
-  } catch {
-    showError('Serveur inaccessible');
-    hide(progressCard);
-    btn.disabled = false;
-  }
-}
-
-// ── Poll ──────────────────────────────────────────────────────
-
-function poll(id, btn) {
-  clearInterval(pollTimer);
-  pollTimer = setInterval(async () => {
     try {
-      const res  = await fetch(`/api/progress/${id}`);
+      const res = await fetch(`/api/info?url=${encodeURIComponent(raw)}`);
       const data = await res.json();
-      if (data.error) { stopPoll(); showError(data.error); btn.disabled = false; return; }
-      updateProgress(data);
-      if (data.status === 'done') {
-        stopPoll(); btn.disabled = false;
-        showDone(id, data.filename, data.is_playlist);
-      } else if (data.status === 'error') {
-        stopPoll(); btn.disabled = false;
-        hide(progressCard);
-        showError(data.error || 'Erreur inconnue');
+
+      if (!res.ok || data.error) {
+        showError(data.error || 'Erreur lors de l’analyse');
+        return;
       }
-    } catch { /* retry */ }
-  }, 500);
-}
 
-function updateProgress(data) {
-  const pct = Math.min(100, Math.round(data.progress || 0));
-  progFill.style.width = pct + '%';
-  progPct.textContent  = pct + '%';
-
-  if (data.status === 'processing') {
-    progLabel.textContent = 'Traitement...';
-  } else if (data.current_title) {
-    progLabel.textContent = data.current_title.length > 55
-      ? data.current_title.slice(0, 55) + '…'
-      : data.current_title;
-  } else {
-    progLabel.textContent = 'Téléchargement...';
+      if (data.type === 'spotify' && data.spotify_data) {
+        renderSpotiCard(data.spotify_data);
+      } else if (data.type === 'playlist') {
+        renderPlaylistCard(data);
+      } else {
+        renderVideoCard(data);
+      }
+    } catch {
+      showError('Serveur inaccessible');
+    } finally {
+      setLoading(false);
+    }
   }
 
-  progCurrent.textContent = (data.is_playlist && data.total > 1)
-    ? `${data.current} / ${data.total} vidéos` : '';
-
-  progSpeed.textContent = data.speed || '';
-  progEta.textContent   = data.eta ? `ETA ${data.eta}` : '';
-}
-
-function showDone(id, filename, isPlaylist) {
-  hide(progressCard);
-  doneName.textContent = filename || '';
-  saveLink.href        = `/api/file/${id}`;
-  saveLink.textContent = isPlaylist ? 'Télécharger .zip' : 'Sauvegarder';
-  saveLink.classList.remove('save-btn-used');
-  saveLink.style.pointerEvents = '';
-  saveLink.style.opacity = '';
-  show(doneCard);
-
-  if (autoDlChk.checked) {
-    autoDownload(id, filename, isPlaylist);
+  async function runUrlSearch(q) {
+    try {
+      const res = await fetch(`/api/search?type=youtube&q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        showError(data.error || 'Erreur de recherche');
+        return;
+      }
+      renderGrid(urlSearchResults, data.results);
+      show(urlSearchResults);
+    } catch {
+      showError('Serveur inaccessible');
+    }
   }
-}
 
-async function autoDownload(id, filename, isPlaylist) {
-  saveLink.textContent = '...';
-  saveLink.style.pointerEvents = 'none';
-  saveLink.style.opacity = '0.5';
-  try {
-    const res = await fetch(`/api/file/${id}`);
-    if (!res.ok) { saveLink.textContent = isPlaylist ? 'Télécharger .zip' : 'Sauvegarder'; return; }
-    const blob = await res.blob();
-    const cd   = res.headers.get('Content-Disposition') || '';
-    const m    = cd.match(/filename="([^"]+)"/);
-    triggerDl(URL.createObjectURL(blob), m ? m[1] : filename || 'download');
-    saveLink.textContent = 'Téléchargé';
-    saveLink.style.opacity = '0.4';
-  } catch {
-    saveLink.textContent = isPlaylist ? 'Télécharger .zip' : 'Sauvegarder';
-    saveLink.style.pointerEvents = '';
-    saveLink.style.opacity = '';
+  function renderVideoCard(data) {
+    videoThumb.src = data.thumbnail || '';
+    videoTitle.textContent = data.title || '';
+    videoChannel.textContent = data.channel || '';
+    videoViews.textContent = data.views || '';
+    videoDuration.textContent = data.duration || '';
+    show(videoCard);
   }
-}
 
-// ── Helpers ───────────────────────────────────────────────────
+  function renderPlaylistCard(data) {
+    pThumb.src = data.thumbnail || '';
+    pTitle.textContent = data.title || '';
+    pChannel.textContent = data.channel || '';
+    pCount.textContent = `${data.count} éléments`;
+    show(playlistCard);
+  }
 
-function resetProgress() {
-  progFill.style.width = '0%';
-  progPct.textContent  = '0%';
-  progLabel.textContent = 'Démarrage...';
-  progSpeed.textContent = '';
-  progEta.textContent   = '';
-  progCurrent.textContent = '';
-}
+  function renderSpotiCard(data) {
+    currentSpotiData = data;
+    spotiCover.src = data.thumbnail || '';
+    spotiTitle.textContent = data.title || '';
+    spotiArtist.textContent = data.artist ? `Par ${data.artist}` : '';
+    spotiCount.textContent = data.total_tracks || 1;
 
-function stopPoll() { clearInterval(pollTimer); }
+    const isSingle = data.kind === 'track' || data.total_tracks === 1;
+    spotiBadge.textContent = isSingle ? 'TITRE' : (data.kind === 'playlist' ? 'PLAYLIST' : 'ALBUM');
+    spotiDlBtn.textContent = isSingle ? 'Télécharger le morceau' : `Télécharger l'Album complet (${data.total_tracks} pistes) (.zip)`;
 
-function showError(msg) { errorMsg.textContent = msg; show(errorMsg); }
-function show(el)  { el.classList.remove('hidden'); }
-function hide(el)  { el.classList.add('hidden'); }
-function hideAll() { [videoCard, playlistCard, progressCard, doneCard, errorMsg].forEach(hide); }
-function hideCards(...els) { els.forEach(hide); }
+    spotiTrackList.innerHTML = '';
+    (data.tracks || []).forEach((t, i) => {
+      const div = document.createElement('div');
+      div.style.cssText = 'display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.05);';
+      div.innerHTML = `<span>${t.track_number || i+1}. ${t.title}</span><span style="color:var(--muted);">${t.artist || ''}</span>`;
+      spotiTrackList.appendChild(div);
+    });
 
-function setLoading(on) {
-  fetchBtn.disabled = on;
-  btnLabel.classList.toggle('hidden', on);
-  btnSpinner.classList.toggle('hidden', !on);
-}
+    show(spotiCard);
+  }
 
-function triggerDl(href, filename) {
-  const a = Object.assign(document.createElement('a'), { href, download: filename });
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(href), 30000);
-}
+  // ── Format Selection Chips ──
+  document.querySelectorAll('#fmt-tabs .fmt-tab').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('#fmt-tabs .fmt-tab').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      curFmt = chip.dataset.fmt;
+      document.getElementById('quality-section').style.display = (curFmt === 'mp3' || curFmt === 'flac' || curFmt === 'm4a') ? 'none' : 'block';
+    });
+  });
+
+  document.querySelectorAll('#spoti-fmt-tabs .fmt-tab').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('#spoti-fmt-tabs .fmt-tab').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      spotiFmt = chip.dataset.spotiFmt;
+    });
+  });
+
+  document.querySelectorAll('#q-grid .q-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#q-grid .q-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      curQ = btn.dataset.q;
+    });
+  });
+
+  // ── Music Search Mode ──
+  const musicInput = document.getElementById('music-input');
+  const musicSearchBtn = document.getElementById('music-search-btn');
+  const musicBtnLabel = document.getElementById('music-btn-label');
+  const musicBtnSpinner = document.getElementById('music-btn-spinner');
+  const musicResults = document.getElementById('music-results');
+  const musicError = document.getElementById('music-error');
+
+  let musicSource = 'youtube';
+
+  document.querySelectorAll('.src-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('.src-chip').forEach(c => {
+        c.classList.remove('active');
+        c.style.border = '1px solid var(--border2)';
+        c.style.background = 'transparent';
+        c.style.color = 'var(--muted2)';
+      });
+      chip.classList.add('active');
+      chip.style.border = '1px solid #fff';
+      chip.style.background = '#fff';
+      chip.style.color = '#000';
+      musicSource = chip.dataset.src;
+
+      // Change de filtre → ré-exécute directement la même recherche
+      if (musicInput.value.trim()) runMusicSearch();
+    });
+  });
+
+  musicSearchBtn.addEventListener('click', runMusicSearch);
+  musicInput.addEventListener('keydown', e => { if (e.key === 'Enter') runMusicSearch(); });
+
+  async function runMusicSearch() {
+    const q = musicInput.value.trim();
+    if (!q) return;
+
+    // Si l'utilisateur colle un lien Spotify directement dans la recherche musique
+    if (q.includes('spotify.com/')) {
+      urlInput.value = q;
+      document.getElementById('tab-url-btn').click();
+      runFetch();
+      return;
+    }
+
+    setMusicLoading(true);
+    hide(musicError);
+    musicResults.innerHTML = '';
+
+    try {
+      const res = await fetch(`/api/search?type=${musicSource}&q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        musicError.textContent = data.error || 'Erreur de recherche';
+        show(musicError);
+        return;
+      }
+
+      renderGrid(musicResults, data.results);
+    } catch {
+      musicError.textContent = 'Serveur inaccessible';
+      show(musicError);
+    } finally {
+      setMusicLoading(false);
+    }
+  }
+
+  function renderGrid(container, results) {
+    container.innerHTML = '';
+    (results || []).forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.style.cssText = 'padding: 12px; cursor: pointer; transition: border-color 0.15s;';
+      card.innerHTML = `
+        <div class="thumb-wrap" style="aspect-ratio: 16/9; margin-bottom: 8px;">
+          <img src="${item.thumbnail || ''}" style="width:100%; height:100%; object-fit:cover;">
+        </div>
+        <h4 style="font-size: 13px; font-weight: 600; line-height: 1.3; height: 2.6em; overflow: hidden; margin-bottom: 4px;">${item.title}</h4>
+        <p style="font-size: 11px; color: var(--muted);">${item.artist || item.channel || ''}</p>
+      `;
+      card.addEventListener('click', () => {
+        if (item.query) {
+          const spotiData = {
+            title: item.title,
+            artist: item.artist,
+            thumbnail: item.thumbnail,
+            kind: 'track',
+            total_tracks: 1,
+            tracks: [{
+              title: item.title,
+              artist: item.artist,
+              track_number: 1,
+              duration: item.duration,
+              query: item.query
+            }]
+          };
+          renderSpotiCard(spotiData);
+        } else {
+          urlInput.value = item.url;
+          document.getElementById('tab-url-btn').click();
+          runFetch();
+        }
+      });
+      container.appendChild(card);
+    });
+  }
+
+  // ── Downloads & Polling ──
+  dlBtn.addEventListener('click', () => startDownload('single', curFmt, curQ));
+  pDlBtn.addEventListener('click', () => startDownload('playlist', pCurFmt, '1080'));
+
+  spotiDlBtn.addEventListener('click', () => {
+    if (!currentSpotiData) return;
+    startSpotiDownload(currentSpotiData, spotiFmt);
+  });
+
+  async function startSpotiDownload(spotiData, fmt) {
+    spotiDlBtn.disabled = true;
+    hideAllCards();
+    resetProgress();
+    show(progressCard);
+
+    try {
+      const res = await fetch('/api/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spoti_data: spotiData, format: fmt, mode: 'spoti_album' }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        showError(data.error || 'Erreur lors du démarrage');
+        hide(progressCard);
+        spotiDlBtn.disabled = false;
+        return;
+      }
+      pollProgress(data.download_id, spotiDlBtn);
+    } catch {
+      showError('Serveur inaccessible');
+      hide(progressCard);
+      spotiDlBtn.disabled = false;
+    }
+  }
+
+  async function startDownload(mode, fmt, quality) {
+    const btn = mode === 'playlist' ? pDlBtn : dlBtn;
+    btn.disabled = true;
+    hideAllCards();
+    resetProgress();
+    show(progressCard);
+
+    try {
+      const res = await fetch('/api/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: currentUrl, format: fmt, quality, mode }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        showError(data.error || 'Erreur');
+        hide(progressCard);
+        btn.disabled = false;
+        return;
+      }
+      pollProgress(data.download_id, btn);
+    } catch {
+      showError('Serveur inaccessible');
+      hide(progressCard);
+      btn.disabled = false;
+    }
+  }
+
+  let pollTimer = null;
+
+  function pollProgress(id, btn) {
+    clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/progress/${id}`);
+        const data = await res.json();
+        if (data.error) {
+          stopPoll();
+          showError(data.error);
+          if (btn) btn.disabled = false;
+          return;
+        }
+
+        updateProgressUI(data);
+
+        if (data.status === 'done') {
+          stopPoll();
+          if (btn) btn.disabled = false;
+          showDone(id, data.filename, data.is_playlist);
+        } else if (data.status === 'error') {
+          stopPoll();
+          if (btn) btn.disabled = false;
+          hide(progressCard);
+          showError(data.error || 'Erreur lors du traitement');
+        }
+      } catch { /* retry */ }
+    }, 600);
+  }
+
+  function updateProgressUI(data) {
+    const pct = Math.min(100, Math.round(data.progress || 0));
+    document.getElementById('prog-fill').style.width = pct + '%';
+    document.getElementById('prog-pct').textContent = pct + '%';
+
+    const progLabel = document.getElementById('prog-label');
+    const progCurrent = document.getElementById('prog-current');
+
+    if (data.status === 'processing') {
+      progLabel.textContent = 'Traitement...';
+    } else if (data.current_title) {
+      progLabel.textContent = data.current_title;
+    } else {
+      progLabel.textContent = 'Téléchargement...';
+    }
+
+    progCurrent.textContent = (data.total > 1) ? `Fichier ${data.current} / ${data.total}` : '';
+    document.getElementById('prog-speed').textContent = data.speed || '';
+    document.getElementById('prog-eta').textContent = data.eta ? `ETA ${data.eta}` : '';
+  }
+
+  function showDone(id, filename, isPlaylist) {
+    hide(progressCard);
+    const doneName = document.getElementById('done-name');
+    const saveLink = document.getElementById('save-link');
+
+    doneName.textContent = filename || '';
+    saveLink.href = `/api/file/${id}`;
+    saveLink.textContent = isPlaylist ? 'Télécharger (.zip)' : 'Sauvegarder';
+    show(doneCard);
+  }
+
+  // ── Helpers ──
+  function resetProgress() {
+    document.getElementById('prog-fill').style.width = '0%';
+    document.getElementById('prog-pct').textContent = '0%';
+    document.getElementById('prog-label').textContent = 'Démarrage...';
+    document.getElementById('prog-current').textContent = '';
+    document.getElementById('prog-speed').textContent = '';
+    document.getElementById('prog-eta').textContent = '';
+  }
+
+  function stopPoll() { if (pollTimer) clearInterval(pollTimer); }
+  function showError(msg) { errorMsg.textContent = msg; show(errorMsg); }
+  function show(el) { if (el) el.classList.remove('hidden'); }
+  function hide(el) { if (el) el.classList.add('hidden'); }
+  function hideAllCards() { [videoCard, playlistCard, spotiCard, progressCard, doneCard, errorMsg, urlSearchResults].forEach(hide); }
+
+  function setLoading(on) {
+    fetchBtn.disabled = on;
+    btnLabel.classList.toggle('hidden', on);
+    btnSpinner.classList.toggle('hidden', !on);
+  }
+
+  function setMusicLoading(on) {
+    musicSearchBtn.disabled = on;
+    musicBtnLabel.classList.toggle('hidden', on);
+    musicBtnSpinner.classList.toggle('hidden', !on);
+  }
+
+});

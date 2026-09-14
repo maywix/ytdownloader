@@ -2,6 +2,7 @@ import io
 import importlib.metadata
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -13,13 +14,34 @@ from pathlib import Path
 
 import requests
 from flask import Flask, render_template, request, jsonify, send_file, Response, after_this_request
-
 import yt_dlp
+import mutagen
+from mutagen.flac import FLAC, Picture
+from mutagen.easyid3 import EasyID3
+from mutagen.id3 import ID3, APIC
+
+
+def _load_dotenv():
+    env_file = Path(__file__).parent / ".env"
+    if not env_file.exists():
+        return
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if key and value:
+            os.environ.setdefault(key, value)
+
+
+_load_dotenv()
 
 app = Flask(__name__)
 
 DOWNLOAD_DIR = Path("/tmp/ytdlp-downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
+
 # Nettoyage des fichiers orphelins au démarrage
 for _orphan in DOWNLOAD_DIR.iterdir():
     try:
@@ -30,17 +52,116 @@ for _orphan in DOWNLOAD_DIR.iterdir():
     except Exception:
         pass
 
-# Drop a cookies.txt here (exported from browser) to unlock Instagram,
-# TikTok private content, age-restricted videos, etc.
 COOKIES_FILE = Path("cookies.txt")
-
 downloads: dict = {}
+
+# ── Spotify / SpotiFLAC Parser ────────────────────────────────────────────────
+
+_spotify_token_cache: dict = {"token": None, "expires_at": 0}
+
+
+def _get_spotify_token():
+    now = time.time()
+    if _spotify_token_cache["token"] and now < _spotify_token_cache["expires_at"] - 30:
+        return _spotify_token_cache["token"]
+
+    client_id = os.environ.get("SPOTIFY_CLIENT_ID")
+    client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        return None
+
+    try:
+        resp = requests.post(
+            "https://accounts.spotify.com/api/token",
+            data={"grant_type": "client_credentials"},
+            auth=(client_id, client_secret),
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            payload = resp.json()
+            _spotify_token_cache["token"] = payload["access_token"]
+            _spotify_token_cache["expires_at"] = now + payload.get("expires_in", 3600)
+            return _spotify_token_cache["token"]
+    except Exception:
+        pass
+    return None
+
+
+def _parse_spotify_url(url: str) -> dict | None:
+    """Parse Spotify track, album, or playlist URLs using open embed metadata."""
+    m = re.search(r"open\.spotify\.com/(?:[a-zA-Z0-9_-]+/)*(track|album|playlist)/([a-zA-Z0-9]+)", url)
+    if not m:
+        return None
+
+    kind, sp_id = m.group(1), m.group(2)
+    embed_url = f"https://open.spotify.com/embed/{kind}/{sp_id}"
+
+    try:
+        r = requests.get(embed_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, timeout=10)
+        if r.status_code != 200:
+            return None
+
+        script_m = re.search(r"<script[^>]*>\s*({.*?\"props\".*?})\s*</script>", r.text, re.DOTALL)
+        if not script_m:
+            return None
+
+        data = json.loads(script_m.group(1))
+        entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
+
+        title = entity.get("title") or entity.get("name") or "Musique Spotify"
+        artist = entity.get("subtitle") or ""
+        if not artist and entity.get("artists"):
+            artist = ", ".join(a.get("name", "") for a in entity["artists"])
+
+        visual = entity.get("visualIdentity", {})
+        thumb = ""
+        if visual and visual.get("image"):
+            thumb = visual["image"][0].get("url", "")
+        if not thumb and entity.get("thumbnail"):
+            thumb = entity["thumbnail"]
+
+        tracks = []
+        raw_tracks = entity.get("trackList", [])
+
+        if kind == "track" and not raw_tracks:
+            tracks.append({
+                "title": title,
+                "artist": artist,
+                "track_number": 1,
+                "duration": fmt_duration((entity.get("duration") or 0) // 1000),
+                "query": f"{artist} - {title}" if artist else title,
+            })
+        else:
+            for idx, t in enumerate(raw_tracks, 1):
+                t_title = t.get("title", f"Piste {idx}")
+                t_artist = t.get("subtitle") or artist
+                tracks.append({
+                    "title": t_title,
+                    "artist": t_artist,
+                    "track_number": idx,
+                    "duration": fmt_duration((t.get("duration") or 0) // 1000),
+                    "query": f"{t_artist} - {t_title}" if t_artist else t_title,
+                })
+
+        return {
+            "type": f"spotify_{kind}",
+            "kind": kind,
+            "id": sp_id,
+            "title": title,
+            "artist": artist,
+            "thumbnail": thumb,
+            "total_tracks": len(tracks),
+            "tracks": tracks,
+            "url": url,
+        }
+    except Exception as e:
+        print(f"Erreur parsing Spotify: {e}")
+        return None
 
 # ── Auto-updater ──────────────────────────────────────────────────────────────
 
 UPDATE_INTERVAL = 48 * 3600  # secondes
 UPDATE_STATE_FILE = Path(__file__).parent / ".update_state.json"
-
 _upd: dict = {"status": "idle", "last_check": None, "version": None}
 
 
@@ -96,7 +217,7 @@ def _updater_loop():
                 pass
         if should_update:
             _run_update()
-        time.sleep(3600)  # réévalue toutes les heures
+        time.sleep(3600)
 
 
 threading.Thread(target=_updater_loop, daemon=True).start()
@@ -113,7 +234,7 @@ def _base_ydl_opts(out_tmpl: str, progress_hook, is_playlist: bool) -> dict:
         "fragment_retries": 10,
         "http_chunk_size": 10485760,
         "ignoreerrors": is_playlist,
-        # Realistic browser UA avoids many platform blocks
+        "js_runtimes": {"node": {}},
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -131,6 +252,7 @@ def _info_ydl_opts(extra: dict | None = None) -> dict:
     opts = {
         "quiet": True,
         "no_warnings": True,
+        "js_runtimes": {"node": {}},
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -164,6 +286,64 @@ def fmt_views(n):
     return f"{n} vues"
 
 
+def _clean(s: str, maxlen: int = 80) -> str:
+    return "".join(c for c in s if c not in r'\/:*?"<>|')[:maxlen]
+
+
+def _embed_music_metadata(filepath: Path, title: str, artist: str, album: str, track_num: int = 1, total_tracks: int = 1, cover_url: str = ""):
+    """Incruste les métadonnées ID3/FLAC et la pochette d'album dans le fichier audio."""
+    try:
+        cover_data = None
+        if cover_url:
+            try:
+                resp = requests.get(cover_url, timeout=10)
+                if resp.status_code == 200:
+                    cover_data = resp.content
+            except Exception:
+                pass
+
+        ext = filepath.suffix.lower()
+        if ext == ".flac":
+            audio = FLAC(str(filepath))
+            audio["title"] = title
+            audio["artist"] = artist
+            audio["album"] = album
+            audio["tracknumber"] = f"{track_num}/{total_tracks}"
+            if cover_data:
+                pic = Picture()
+                pic.type = 3
+                pic.mime = "image/jpeg"
+                pic.data = cover_data
+                audio.clear_pictures()
+                audio.add_picture(pic)
+            audio.save()
+
+        elif ext == ".mp3":
+            try:
+                audio = EasyID3(str(filepath))
+            except Exception:
+                audio = EasyID3()
+                audio.filename = str(filepath)
+            audio["title"] = title
+            audio["artist"] = artist
+            audio["album"] = album
+            audio["tracknumber"] = f"{track_num}/{total_tracks}"
+            audio.save()
+
+            if cover_data:
+                id3 = ID3(str(filepath))
+                id3.add(APIC(
+                    encoding=3,
+                    mime="image/jpeg",
+                    type=3,
+                    desc="Cover",
+                    data=cover_data
+                ))
+                id3.save()
+    except Exception as e:
+        print(f"Erreur d incrustation des tags pour {filepath}: {e}")
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -187,21 +367,45 @@ def get_version():
     })
 
 
+@app.route("/api/music_info")
+def get_music_info():
+    url = request.args.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "URL manquante"}), 400
+
+    sp_data = _parse_spotify_url(url)
+    if sp_data:
+        return jsonify(sp_data)
+
+    return jsonify({"error": "URL Spotify non reconnue ou invalide"}), 400
+
+
 @app.route("/api/info")
 def get_info():
     url = request.args.get("url", "").strip()
     if not url:
         return jsonify({"error": "URL manquante"}), 400
 
+    sp_data = _parse_spotify_url(url)
+    if sp_data:
+        return jsonify({
+            "type": "spotify",
+            "spotify_data": sp_data,
+            "title": sp_data["title"],
+            "channel": sp_data["artist"],
+            "thumbnail": sp_data["thumbnail"],
+            "count": sp_data["total_tracks"],
+            "url": url,
+            "audio_only": True,
+        })
+
     try:
         with yt_dlp.YoutubeDL(_info_ydl_opts({"extract_flat": "in_playlist"})) as ydl:
             info = ydl.extract_info(url, download=False)
 
-        # Detect audio-only services (SoundCloud, Bandcamp…)
         audio_only_domains = ["soundcloud.com", "bandcamp.com", "audiomack.com"]
         is_audio_only = any(d in url.lower() for d in audio_only_domains)
 
-        # Playlist / channel
         if info.get("_type") in ("playlist", "multi_video") or (
             "entries" in info and info.get("webpage_url_basename") != "watch"
         ):
@@ -217,11 +421,9 @@ def get_info():
                 "audio_only": is_audio_only,
             })
 
-        # Single video — re-fetch full info for thumbnail + available formats
         with yt_dlp.YoutubeDL(_info_ydl_opts()) as ydl:
             full = ydl.extract_info(url, download=False)
 
-        # Extract available video heights
         fmts = full.get("formats") or []
         heights = sorted(set(
             f["height"] for f in fmts
@@ -247,15 +449,156 @@ def get_info():
         return jsonify({"error": str(e)}), 500
 
 
+def _best_thumb(thumbs):
+    if not thumbs:
+        return ""
+    return thumbs[-1].get("url", "")
+
+
+def _search_youtube(q: str, limit: int = 12) -> list:
+    with yt_dlp.YoutubeDL(_info_ydl_opts({"extract_flat": "in_playlist"})) as ydl:
+        info = ydl.extract_info(f"ytsearch{limit}:{q}", download=False)
+    out = []
+    for e in (info.get("entries") or []):
+        if not e:
+            continue
+        vid = e.get("id")
+        out.append({
+            "title": e.get("title", ""),
+            "thumbnail": e.get("thumbnail") or _best_thumb(e.get("thumbnails")),
+            "duration": fmt_duration(e.get("duration")),
+            "channel": e.get("channel") or e.get("uploader", ""),
+            "url": f"https://www.youtube.com/watch?v={vid}" if vid else e.get("url", ""),
+        })
+    return out
+
+
+def _search_soundcloud(q: str, limit: int = 12) -> list:
+    with yt_dlp.YoutubeDL(_info_ydl_opts({"extract_flat": "in_playlist"})) as ydl:
+        info = ydl.extract_info(f"scsearch{limit}:{q}", download=False)
+    out = []
+    for e in (info.get("entries") or []):
+        if not e:
+            continue
+        out.append({
+            "title": e.get("title", ""),
+            "thumbnail": e.get("thumbnail") or _best_thumb(e.get("thumbnails")),
+            "duration": fmt_duration(e.get("duration")),
+            "channel": e.get("uploader", ""),
+            "url": e.get("url") or e.get("webpage_url", ""),
+        })
+    return out
+
+
+def _search_spotify(q: str, limit: int = 12) -> list:
+    token = _get_spotify_token()
+    if token:
+        try:
+            resp = requests.get(
+                "https://api.spotify.com/v1/search",
+                params={"q": q, "type": "track", "limit": limit},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                out = []
+                for t in data.get("tracks", {}).get("items", []):
+                    images = t.get("album", {}).get("images", [])
+                    thumb = images[1]["url"] if len(images) > 1 else (images[0]["url"] if images else "")
+                    artist = ", ".join(a["name"] for a in t.get("artists", []))
+                    title = t.get("name", "")
+                    out.append({
+                        "title": title,
+                        "artist": artist,
+                        "album": t.get("album", {}).get("name", ""),
+                        "thumbnail": thumb,
+                        "duration": fmt_duration((t.get("duration_ms") or 0) // 1000),
+                        "query": f"{artist} - {title}",
+                    })
+                return out
+        except Exception:
+            pass
+
+    return _search_youtube(f"{q} audio", limit)
+
+
+@app.route("/api/search")
+def search():
+    q = request.args.get("q", "").strip()
+    kind = request.args.get("type", "youtube")
+    if not q:
+        return jsonify({"error": "Requête manquante"}), 400
+
+    try:
+        if kind == "youtube":
+            results = _search_youtube(q)
+        elif kind == "soundcloud":
+            results = _search_soundcloud(q)
+        elif kind == "spotify":
+            results = _search_spotify(q)
+        else:
+            return jsonify({"error": "Type de recherche inconnu"}), 400
+        return jsonify({"results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/resolve_music", methods=["POST"])
+def resolve_music():
+    data = request.get_json()
+    query = (data.get("query") or "").strip()
+    if not query:
+        return jsonify({"error": "Requête manquante"}), 400
+
+    try:
+        with yt_dlp.YoutubeDL(_info_ydl_opts({"extract_flat": "in_playlist"})) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+            entries = info.get("entries") or []
+            if not entries or not entries[0]:
+                return jsonify({"error": "Aucun résultat trouvé"}), 404
+            first = entries[0]
+            vid = first.get("id")
+            yt_url = f"https://www.youtube.com/watch?v={vid}" if vid else first.get("url", "")
+
+        return get_info_for_url(yt_url)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def get_info_for_url(url: str):
+    with yt_dlp.YoutubeDL(_info_ydl_opts()) as ydl:
+        full = ydl.extract_info(url, download=False)
+
+    fmts = full.get("formats") or []
+    heights = sorted(set(
+        f["height"] for f in fmts
+        if f.get("height") and f.get("vcodec") not in ("none", None, "")
+    ), reverse=True)
+
+    return jsonify({
+        "type": "video",
+        "title": full.get("title", ""),
+        "thumbnail": full.get("thumbnail", ""),
+        "duration": fmt_duration(full.get("duration")),
+        "channel": full.get("channel") or full.get("uploader", ""),
+        "views": fmt_views(full.get("view_count")),
+        "url": url,
+        "max_height": heights[0] if heights else None,
+        "audio_only": False,
+    })
+
+
 @app.route("/api/download", methods=["POST"])
 def start_download():
     data = request.get_json()
-    url = data.get("url", "").strip()
-    fmt = data.get("format", "mp4")   # mp4 | mkv | mp3 | m4a
+    url = (data.get("url") or "").strip()
+    fmt = data.get("format", "best")
     quality = data.get("quality", "1080")
-    mode = data.get("mode", "single")  # single | playlist
+    mode = data.get("mode", "single")
+    spoti_data = data.get("spoti_data")
 
-    if not url:
+    if not url and not spoti_data:
         return jsonify({"error": "URL manquante"}), 400
 
     download_id = str(uuid.uuid4())
@@ -264,26 +607,105 @@ def start_download():
         "progress": 0,
         "speed": "",
         "eta": "",
+        "filename": "",
+        "filepath": "",
+        "current_title": "",
         "current": 0,
         "total": 1,
-        "current_title": "",
-        "filepath": None,
-        "filename": None,
-        "is_playlist": mode == "playlist",
+        "is_playlist": mode in ("playlist", "spoti_album"),
         "error": None,
     }
 
-    threading.Thread(
-        target=_do_download,
-        args=(download_id, url, fmt, quality, mode),
+    t = threading.Thread(
+        target=_download_thread,
+        args=(download_id, url, fmt, quality, mode, spoti_data),
         daemon=True,
-    ).start()
+    )
+    t.start()
 
     return jsonify({"download_id": download_id})
 
 
-def _do_download(download_id: str, url: str, fmt: str, quality: str, mode: str):
+def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: str, spoti_data: dict | None):
     state = downloads[download_id]
+
+    if mode == "spoti_album" or (spoti_data and spoti_data.get("tracks")):
+        try:
+            tracks = spoti_data.get("tracks") or []
+            album_title = spoti_data.get("title") or "Album"
+            album_artist = spoti_data.get("artist") or "Artiste"
+            album_cover = spoti_data.get("thumbnail") or ""
+
+            state["total"] = len(tracks)
+            state["current"] = 0
+            state["status"] = "downloading"
+
+            out_dir = DOWNLOAD_DIR / download_id
+            out_dir.mkdir(exist_ok=True)
+
+            ext_map = {"flac": ".flac", "mp3": ".mp3", "m4a": ".m4a"}
+            chosen_ext = ext_map.get(fmt, ".flac")
+
+            for idx, track in enumerate(tracks, 1):
+                state["current"] = idx
+                state["current_title"] = f"{idx}/{len(tracks)}: {track['artist']} - {track['title']}"
+                state["progress"] = ((idx - 1) / len(tracks)) * 100
+
+                query = track.get("query") or f"{track['artist']} - {track['title']} audio"
+                clean_title = _clean(f"{idx:02d} - {track['artist']} - {track['title']}")
+                file_stem = str(out_dir / clean_title)
+                out_tmpl = f"{file_stem}.%(ext)s"
+
+                codec = fmt if fmt in ("flac", "mp3", "m4a") else "flac"
+                bitrate = quality if quality in ("128", "256", "320") else "320"
+
+                ydl_opts = {
+                    "outtmpl": out_tmpl,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "format": "bestaudio/best",
+                    "js_runtimes": {"node": {}},
+                    "postprocessors": [{
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": codec,
+                        "preferredquality": bitrate if codec == "mp3" else "0",
+                    }],
+                }
+
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.extract_info(f"ytsearch1:{query}", download=True)
+
+                    final_file = Path(f"{file_stem}{chosen_ext}")
+                    if not final_file.exists():
+                        found = list(out_dir.glob(f"{clean_title}.*"))
+                        if found:
+                            final_file = found[0]
+
+                    if final_file.exists():
+                        _embed_music_metadata(
+                            filepath=final_file,
+                            title=track["title"],
+                            artist=track["artist"],
+                            album=album_title,
+                            track_num=idx,
+                            total_tracks=len(tracks),
+                            cover_url=album_cover,
+                        )
+                except Exception as e_track:
+                    print(f"Erreur morceau {track['title']}: {e_track}")
+
+            state["status"] = "done"
+            state["progress"] = 100
+            state["filepath"] = str(out_dir)
+            fmt_upper = fmt.upper()
+            state["filename"] = f"{_clean(album_artist)} - {_clean(album_title)} ({fmt_upper})"
+
+        except Exception as e:
+            state["status"] = "error"
+            state["error"] = str(e)
+        return
+
     is_playlist = mode == "playlist"
 
     if is_playlist:
@@ -313,16 +735,81 @@ def _do_download(download_id: str, url: str, fmt: str, quality: str, mode: str):
                 state["current"] = state.get("current", 0) + 1
             state["status"] = "processing"
 
-    res_map = {"360": 360, "480": 480, "720": 720, "1080": 1080,
-               "2k": 1440, "4k": 2160, "8k": 4320}
+    res_map = {"360": 360, "480": 480, "720": 720, "1080": 1080, "2k": 1440, "4k": 2160, "8k": 4320}
     height = res_map.get(quality, 1080)
-
     base = _base_ydl_opts(out_tmpl, progress_hook, is_playlist)
 
-    # ── Optimal mode: best video + audio.
-    # Prefer MP4 (H.264+AAC compatible). yt-dlp falls back to MKV automatically
-    # when the selected streams use VP9/AV1/Opus which MP4 can't contain natively.
-    if fmt == "best":
+    if fmt == "flac":
+        ydl_opts = {
+            **base,
+            "format": "bestaudio/best",
+            "writethumbnail": True,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "flac",
+                    "preferredquality": "0",
+                },
+                {
+                    "key": "FFmpegMetadata",
+                    "add_metadata": True,
+                },
+                {
+                    "key": "EmbedThumbnail",
+                    "already_have_thumbnail": False,
+                },
+            ],
+        }
+        expected_ext = ".flac"
+
+    elif fmt == "mp3":
+        bitrate = quality if quality in ("128", "256", "320") else "320"
+        ydl_opts = {
+            **base,
+            "format": "bestaudio/best",
+            "writethumbnail": True,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": bitrate,
+                },
+                {
+                    "key": "FFmpegMetadata",
+                    "add_metadata": True,
+                },
+                {
+                    "key": "EmbedThumbnail",
+                    "already_have_thumbnail": False,
+                },
+            ],
+        }
+        expected_ext = ".mp3"
+
+    elif fmt == "m4a":
+        ydl_opts = {
+            **base,
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "writethumbnail": True,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "m4a",
+                    "preferredquality": "0",
+                },
+                {
+                    "key": "FFmpegMetadata",
+                    "add_metadata": True,
+                },
+                {
+                    "key": "EmbedThumbnail",
+                    "already_have_thumbnail": False,
+                },
+            ],
+        }
+        expected_ext = ".m4a"
+
+    elif fmt == "best":
         ydl_opts = {
             **base,
             "format": "bestvideo+bestaudio/best",
@@ -330,45 +817,15 @@ def _do_download(download_id: str, url: str, fmt: str, quality: str, mode: str):
         }
         expected_ext = ".mp4"
 
-    elif fmt == "mp3":
-        bitrate = quality if quality in ("128", "256") else "256"
-        ydl_opts = {
-            **base,
-            "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": bitrate,
-            }],
-            "postprocessor_args": {"ffmpeg": ["-threads", "0"]},
-        }
-        expected_ext = ".mp3"
-
-    elif fmt == "m4a":
-        # Download AAC directly — no transcoding, fastest audio option
-        ydl_opts = {
-            **base,
-            "format": "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio",
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "m4a",
-                "preferredquality": "0",
-            }],
-        }
-        expected_ext = ".m4a"
-
     elif fmt == "mkv":
         ydl_opts = {
             **base,
-            "format": (
-                f"bestvideo[height<={height}]+bestaudio"
-                f"/best[height<={height}]"
-            ),
+            "format": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
             "merge_output_format": "mkv",
         }
         expected_ext = ".mkv"
 
-    else:  # mp4 — préfère H.264+AAC, bascule sur MKV si les codecs ne sont pas compatibles MP4
+    else:
         ydl_opts = {
             **base,
             "format": (
@@ -418,10 +875,6 @@ def _do_download(download_id: str, url: str, fmt: str, quality: str, mode: str):
         state["error"] = str(e)
 
 
-def _clean(s: str, maxlen: int = 80) -> str:
-    return "".join(c for c in s if c not in r'\/:*?"<>|')[:maxlen]
-
-
 @app.route("/api/progress/<download_id>")
 def get_progress(download_id):
     d = downloads.get(download_id)
@@ -449,10 +902,9 @@ def serve_file(download_id):
                 if f.is_file():
                     zf.write(f, f.name)
         buf.seek(0)
-        # Suppression immédiate du dossier playlist après zip en mémoire
         shutil.rmtree(filepath, ignore_errors=True)
         downloads.pop(download_id, None)
-        zip_name = f"{_clean(d.get('filename', 'playlist'))}.zip"
+        zip_name = f"{_clean(d.get('filename', 'album'))}.zip"
         return Response(
             buf.read(),
             headers={
@@ -508,5 +960,5 @@ def download_thumbnail():
 
 
 if __name__ == "__main__":
-    print("\n  YTDown → http://localhost:8080\n")
+    print("\n  YTDown + SpotiFLAC → http://localhost:8080\n")
     app.run(host="0.0.0.0", port=8080, debug=False, threaded=True)
