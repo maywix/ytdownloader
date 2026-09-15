@@ -513,15 +513,27 @@ def _fetch_artist_discography(url: str) -> dict | None:
 
 
 # ── Auto-updater ──────────────────────────────────────────────────────────────
+# Vérifie et met à jour yt-dlp, SpotiFLAC et deemix toutes les 48h via pip,
+# à l'intérieur du conteneur en cours d'exécution (persiste jusqu'au prochain
+# rebuild de l'image, comme pour yt-dlp historiquement).
 
 UPDATE_INTERVAL = 48 * 3600  # secondes
 UPDATE_STATE_FILE = Path(__file__).parent / ".update_state.json"
-_upd: dict = {"status": "idle", "last_check": None, "version": None}
+UPDATABLE_PACKAGES = {
+    "yt-dlp": ["pip3", "install", "--upgrade", "yt-dlp", "--break-system-packages"],
+    "SpotiFLAC": ["pip3", "install", "--upgrade", "SpotiFLAC", "--break-system-packages"],
+    "deemix": ["pip3", "install", "--upgrade", "deemix[spotify]", "--break-system-packages"],
+}
+_upd: dict = {name: {"status": "idle", "last_check": None, "version": None} for name in UPDATABLE_PACKAGES}
 
 
 def _current_ytdlp_version() -> str:
+    return _package_version("yt-dlp")
+
+
+def _package_version(dist_name: str) -> str:
     try:
-        return importlib.metadata.version("yt-dlp")
+        return importlib.metadata.version(dist_name)
     except Exception:
         return "?"
 
@@ -529,7 +541,10 @@ def _current_ytdlp_version() -> str:
 def _load_upd_state():
     try:
         if UPDATE_STATE_FILE.exists():
-            _upd.update(json.loads(UPDATE_STATE_FILE.read_text()))
+            saved = json.loads(UPDATE_STATE_FILE.read_text())
+            for name in UPDATABLE_PACKAGES:
+                if isinstance(saved.get(name), dict):
+                    _upd[name].update(saved[name])
     except Exception:
         pass
 
@@ -541,36 +556,39 @@ def _save_upd_state():
         pass
 
 
-def _run_update():
-    _upd["status"] = "checking"
+def _run_update(name: str, cmd: list):
+    _upd[name]["status"] = "checking"
     try:
-        result = subprocess.run(
-            ["pip3", "install", "--upgrade", "yt-dlp", "--break-system-packages"],
-            capture_output=True, text=True, timeout=180,
-        )
-        _upd["last_check"] = datetime.now().isoformat()
-        _upd["version"]    = _current_ytdlp_version()
-        _upd["status"]     = "ok" if result.returncode == 0 else "error"
-    except Exception:
-        _upd["status"] = "error"
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        _upd[name]["last_check"] = datetime.now().isoformat()
+        _upd[name]["version"] = _package_version(name)
+        _upd[name]["status"] = "ok" if result.returncode == 0 else "error"
+        if result.returncode != 0:
+            print(f"[updater] {name} : échec de la mise à jour : {result.stderr[-500:]}")
+    except Exception as exc:
+        _upd[name]["status"] = "error"
+        print(f"[updater] {name} : exception pendant la mise à jour : {exc}")
     finally:
         _save_upd_state()
 
 
 def _updater_loop():
     _load_upd_state()
-    _upd.setdefault("version", _current_ytdlp_version())
+    for name in UPDATABLE_PACKAGES:
+        if not _upd[name].get("version") or _upd[name]["version"] == "?":
+            _upd[name]["version"] = _package_version(name)
     while True:
-        should_update = True
-        last = _upd.get("last_check")
-        if last:
-            try:
-                if datetime.now() - datetime.fromisoformat(last) < timedelta(seconds=UPDATE_INTERVAL):
-                    should_update = False
-            except Exception:
-                pass
-        if should_update:
-            _run_update()
+        for name, cmd in UPDATABLE_PACKAGES.items():
+            last = _upd[name].get("last_check")
+            should_update = True
+            if last:
+                try:
+                    if datetime.now() - datetime.fromisoformat(last) < timedelta(seconds=UPDATE_INTERVAL):
+                        should_update = False
+                except Exception:
+                    pass
+            if should_update:
+                _run_update(name, cmd)
         time.sleep(3600)
 
 
@@ -755,22 +773,27 @@ def deemix():
     return render_template("deemix.html")
 
 
-@app.route("/api/version")
-def get_version():
-    last = _upd.get("last_check")
+def _package_status(name: str) -> dict:
+    info = _upd.get(name, {})
+    last = info.get("last_check")
     next_check = None
     if last:
         try:
-            next_dt = datetime.fromisoformat(last) + timedelta(seconds=UPDATE_INTERVAL)
-            next_check = next_dt.isoformat()
+            next_check = (datetime.fromisoformat(last) + timedelta(seconds=UPDATE_INTERVAL)).isoformat()
         except Exception:
             pass
-    return jsonify({
-        "version":    _upd.get("version") or _current_ytdlp_version(),
-        "status":     _upd.get("status", "idle"),
+    return {
+        "version": info.get("version") or _package_version(name),
+        "status": info.get("status", "idle"),
         "last_check": last,
         "next_check": next_check,
-    })
+    }
+
+
+@app.route("/api/version")
+def get_version():
+    packages = {name: _package_status(name) for name in UPDATABLE_PACKAGES}
+    return jsonify({**packages["yt-dlp"], "packages": packages})
 
 
 @app.route("/api/music_info")

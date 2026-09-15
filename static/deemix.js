@@ -23,8 +23,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedSearchFilter = 'all';
 
   const STATE_KEY = 'deemix_state';
-  function saveState(patch) {
-    YTPersist.save(STATE_KEY, { ...(YTPersist.load(STATE_KEY) || {}), ...patch });
+  function saveSearchState(patch) {
+    YTPersist.save(STATE_KEY, patch);
   }
 
   const previewAudio = new Audio();
@@ -73,6 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
       button.setAttribute('aria-pressed', 'true');
       selectedSearchFilter = button.dataset.filter;
       renderSearchResults(latestSearchResults);
+      if (latestSearchResults.length) saveSearchState({ query: searchInput.value.trim(), results: latestSearchResults, filter: selectedSearchFilter });
     });
   });
 
@@ -103,7 +104,6 @@ document.addEventListener('DOMContentLoaded', () => {
       deemixData = data;
       renderMusic(data);
       show(card);
-      saveState({ lastUrl: url, lastData: data, downloadId: null });
     } catch (error) {
       showError(error.message || 'Serveur inaccessible.');
     } finally {
@@ -168,6 +168,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!response.ok || data.error) throw new Error(data.error || 'Recherche impossible.');
       latestSearchResults = data.results || [];
       renderSearchResults(latestSearchResults);
+      saveSearchState({ query, results: latestSearchResults, filter: selectedSearchFilter });
     } catch (error) {
       showError(error.message || 'Serveur inaccessible.');
     } finally {
@@ -241,7 +242,6 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.error || 'Le téléchargement n’a pas pu démarrer.');
-      saveState({ downloadId: data.download_id });
       pollProgress(data.download_id);
     } catch (error) {
       hide(progressCard);
@@ -270,7 +270,6 @@ document.addEventListener('DOMContentLoaded', () => {
           downloadButton.disabled = false;
           hide(progressCard);
           showError(data.error || 'Erreur pendant le téléchargement.');
-          saveState({ downloadId: null });
         }
       } catch (error) {
         clearInterval(polling);
@@ -316,53 +315,44 @@ document.addEventListener('DOMContentLoaded', () => {
   function show(element) { element.classList.remove('hidden'); }
   function hide(element) { element.classList.add('hidden'); }
 
-  // ── Reprise après rechargement / fermeture de fenêtre ──
-  async function restoreState() {
+  // ── Recherche restaurée uniquement lors d'un retour arrière du navigateur
+  // (pas sur un simple rechargement ni une arrivée directe sur la page) ──
+  function restoreSearchState() {
+    if (!YTPersist.isBackForward()) return;
     const state = YTPersist.load(STATE_KEY);
-    if (!state) return;
+    if (!state || !state.results) return;
 
-    if (state.downloadId) {
-      hide(card);
-      resetProgress();
-      show(progressCard);
-      try {
-        const response = await fetch(`/api/progress/${state.downloadId}`);
-        const data = await response.json();
-        if (data.error) {
-          hide(progressCard);
-          saveState({ downloadId: null });
-          restoreLastView(state);
-          return;
-        }
-        updateProgress(data);
-        if (data.status === 'done') {
-          hide(progressCard);
-          document.getElementById('deemix-done-name').textContent = data.filename || '';
-          document.getElementById('deemix-save-link').href = `/api/file/${state.downloadId}`;
-          show(doneCard);
-        } else if (data.status === 'error') {
-          hide(progressCard);
-          showError(data.error || 'Erreur pendant le téléchargement.');
-          saveState({ downloadId: null });
-        } else {
-          pollProgress(state.downloadId);
-        }
-      } catch {
-        hide(progressCard);
-      }
-      return;
+    searchInput.value = state.query || '';
+    latestSearchResults = state.results;
+    selectedSearchFilter = state.filter || 'all';
+    document.querySelectorAll('#deemix-search-filters .fmt-tab').forEach((tab) => {
+      const active = tab.dataset.filter === selectedSearchFilter;
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-pressed', String(active));
+    });
+    renderSearchResults(latestSearchResults);
+  }
+
+  restoreSearchState();
+
+  // ── Indicateur de version du paquet deemix (auto-mis à jour côté serveur) ──
+  async function loadVersionBadge() {
+    const badge = document.getElementById('deemix-version-badge');
+    if (!badge) return;
+    try {
+      const res = await fetch('/api/version');
+      const data = await res.json();
+      const info = (data.packages || {}).deemix || {};
+      const dot = badge.querySelector('.version-dot');
+      const text = document.getElementById('deemix-v-text');
+      dot.classList.remove('ok', 'checking', 'error');
+      dot.classList.add(['ok', 'checking', 'error'].includes(info.status) ? info.status : 'ok');
+      text.textContent = info.version ? `deemix ${info.version}` : 'deemix';
+      badge.title = info.last_check ? `Dernière vérification : ${new Date(info.last_check).toLocaleString('fr-FR')}` : 'Vérification à venir';
+      badge.classList.remove('hidden');
+    } catch {
+      /* silencieux */
     }
-
-    restoreLastView(state);
   }
-
-  function restoreLastView(state) {
-    if (!state.lastData) return;
-    urlInput.value = state.lastUrl || '';
-    deemixData = state.lastData;
-    renderMusic(state.lastData);
-    show(card);
-  }
-
-  restoreState();
+  loadVersionBadge();
 });

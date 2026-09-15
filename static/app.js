@@ -59,8 +59,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let pCurFmt = 'mp4';
 
   const STATE_KEY = 'ytdown_state';
-  function saveState(patch) {
-    YTPersist.save(STATE_KEY, { ...(YTPersist.load(STATE_KEY) || {}), ...patch });
+  function saveSearchState(patch) {
+    YTPersist.save(STATE_KEY, patch);
   }
 
   fetchBtn.addEventListener('click', runFetch);
@@ -102,10 +102,8 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.href = `/spotify?url=${encodeURIComponent(raw)}`;
       } else if (data.type === 'playlist') {
         renderPlaylistCard(data);
-        saveState({ lastView: 'playlist', lastUrl: currentUrl, lastData: data, downloadId: null, downloadKind: null });
       } else {
         renderVideoCard(data);
-        saveState({ lastView: 'video', lastUrl: currentUrl, lastData: data, downloadId: null, downloadKind: null });
       }
     } catch {
       showError('Serveur inaccessible');
@@ -124,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       renderGrid(urlSearchResults, data.results);
       show(urlSearchResults);
+      saveSearchState({ context: 'url', query: q, results: data.results });
     } catch {
       showError('Serveur inaccessible');
     }
@@ -238,6 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       renderGrid(musicResults, data.results);
+      saveSearchState({ context: 'music', query: q, source: musicSource, results: data.results });
     } catch {
       musicError.textContent = 'Serveur inaccessible';
       show(musicError);
@@ -292,7 +292,6 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.disabled = false;
         return;
       }
-      saveState({ downloadId: data.download_id, downloadKind: mode });
       pollProgress(data.download_id, btn);
     } catch {
       showError('Serveur inaccessible');
@@ -313,7 +312,6 @@ document.addEventListener('DOMContentLoaded', () => {
           stopPoll();
           showError(data.error);
           if (btn) btn.disabled = false;
-          saveState({ downloadId: null, downloadKind: null });
           return;
         }
 
@@ -328,7 +326,6 @@ document.addEventListener('DOMContentLoaded', () => {
           if (btn) btn.disabled = false;
           hide(progressCard);
           showError(data.error || 'Erreur lors du traitement');
-          saveState({ downloadId: null, downloadKind: null });
         }
       } catch { /* retry */ }
     }, 600);
@@ -394,57 +391,51 @@ document.addEventListener('DOMContentLoaded', () => {
     musicBtnSpinner.classList.toggle('hidden', !on);
   }
 
-  // ── Reprise après rechargement / fermeture de fenêtre ──
-  async function restoreState() {
+  // ── Recherche restaurée uniquement lors d'un retour arrière du navigateur
+  // (pas sur un simple rechargement ni une arrivée directe sur la page) ──
+  function restoreSearchState() {
+    if (!YTPersist.isBackForward()) return;
     const state = YTPersist.load(STATE_KEY);
-    if (!state) return;
+    if (!state || !state.results) return;
 
-    if (state.downloadId) {
-      const btn = state.downloadKind === 'playlist' ? pDlBtn : dlBtn;
-      hideAllCards();
-      resetProgress();
-      show(progressCard);
-      try {
-        const res = await fetch(`/api/progress/${state.downloadId}`);
-        const data = await res.json();
-        if (data.error) {
-          // Le serveur a redémarré entre-temps (état en mémoire perdu) : on
-          // retombe sur la dernière recherche/analyse au lieu de rester bloqué.
-          hide(progressCard);
-          saveState({ downloadId: null, downloadKind: null });
-          restoreLastView(state);
-          return;
-        }
-        updateProgressUI(data);
-        if (data.status === 'done') {
-          showDone(state.downloadId, data.filename, data.is_playlist);
-        } else if (data.status === 'error') {
-          hide(progressCard);
-          showError(data.error || 'Erreur pendant le téléchargement.');
-          saveState({ downloadId: null, downloadKind: null });
-        } else {
-          pollProgress(state.downloadId, btn);
-        }
-      } catch {
-        hide(progressCard);
-      }
-      return;
-    }
-
-    restoreLastView(state);
-  }
-
-  function restoreLastView(state) {
-    if (!state.lastData) return;
-    currentUrl = state.lastUrl || '';
-    urlInput.value = state.lastUrl || '';
-    if (state.lastView === 'video') {
-      renderVideoCard(state.lastData);
-    } else if (state.lastView === 'playlist') {
-      renderPlaylistCard(state.lastData);
+    if (state.context === 'music') {
+      document.getElementById('tab-search-btn').click();
+      musicInput.value = state.query || '';
+      musicSource = state.source || 'youtube';
+      document.querySelectorAll('.src-chip').forEach((chip) => {
+        const active = chip.dataset.src === musicSource;
+        chip.classList.toggle('active', active);
+        chip.style.border = active ? '1px solid #fff' : '1px solid var(--border2)';
+        chip.style.background = active ? '#fff' : 'transparent';
+        chip.style.color = active ? '#000' : 'var(--muted2)';
+      });
+      renderGrid(musicResults, state.results);
+    } else if (state.context === 'url') {
+      urlInput.value = state.query || '';
+      renderGrid(urlSearchResults, state.results);
+      show(urlSearchResults);
     }
   }
 
-  restoreState();
+  restoreSearchState();
+
+  // ── Indicateur de version yt-dlp (auto-mis à jour côté serveur) ──
+  async function loadVersionBadge() {
+    try {
+      const res = await fetch('/api/version');
+      const data = await res.json();
+      const badge = document.getElementById('version-badge');
+      const dot = badge.querySelector('.version-dot');
+      const text = document.getElementById('v-text');
+      dot.classList.remove('ok', 'checking', 'error');
+      dot.classList.add(['ok', 'checking', 'error'].includes(data.status) ? data.status : 'ok');
+      text.textContent = data.version ? `yt-dlp ${data.version}` : 'yt-dlp';
+      badge.title = data.last_check ? `Dernière vérification : ${new Date(data.last_check).toLocaleString('fr-FR')}` : 'Vérification à venir';
+      badge.classList.remove('hidden');
+    } catch {
+      /* silencieux : l'indicateur reste caché si l'API n'est pas joignable */
+    }
+  }
+  loadVersionBadge();
 
 });

@@ -16,4 +16,14 @@ window.YTPersist = {
   clear(key) {
     try { localStorage.removeItem(key); } catch (e) { /* rien à faire */ }
   },
+  // Vrai uniquement pour un retour arrière/avant du navigateur — pas pour un
+  // simple rechargement ou une arrivée directe sur la page.
+  isBackForward() {
+    try {
+      const nav = performance.getEntriesByType('navigation')[0];
+      return !!nav && nav.type === 'back_forward';
+    } catch (e) {
+      return false;
+    }
+  },
 };
