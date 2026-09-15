@@ -180,6 +180,22 @@ def admin_logout():
     return redirect(url_for("admin_login"))
 
 
+@app.route("/admin/api/reset-admin", methods=["POST"])
+def admin_api_reset():
+    """Filet de secours : force le compte 'admin' à admin/1234 quel que soit
+    l'état actuel de data/users.json (utile si le bootstrap au premier
+    démarrage a créé un compte différent). À retirer une fois l'accès repris
+    en main : `curl -X POST http://<host>:8080/admin/api/reset-admin`."""
+    with _data_lock:
+        users = _load_json(USERS_FILE, {})
+        users["admin"] = {
+            "password_hash": generate_password_hash("1234"),
+            "is_admin": True,
+        }
+        _save_json(USERS_FILE, users)
+    return jsonify({"status": "ok", "username": "admin", "password": "1234"})
+
+
 @app.route("/admin")
 @admin_required
 def admin_dashboard():
