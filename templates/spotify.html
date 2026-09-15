@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpotiFLAC — YTDown</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="header-top">
+        <h1 class="logo">SpotiFLAC</h1>
+        <a class="fmt-tab" href="/">YTDown</a>
+      </div>
+      <p class="tagline">Recherchez un titre ou collez un lien Spotify vers un morceau, un album ou une playlist.</p>
+    </header>
+
+    <main>
+      <section>
+        <div class="input-row">
+          <input id="spotify-url" type="url" placeholder="https://open.spotify.com/..." autocomplete="off" spellcheck="false">
+          <button id="spotify-analyse-btn">
+            <span id="spotify-analyse-label">Analyser</span>
+            <span id="spotify-analyse-spinner" class="spinner hidden"></span>
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <div class="input-row">
+          <input id="spotify-search" type="search" placeholder="Rechercher un titre ou un artiste" autocomplete="off">
+          <button id="spotify-search-btn">
+            <span id="spotify-search-label">Rechercher</span>
+            <span id="spotify-search-spinner" class="spinner hidden"></span>
+          </button>
+        </div>
+        <div class="fmt-tabs" id="spotify-search-filters">
+          <button type="button" class="fmt-tab active" data-filter="all">Tout</button>
+          <button type="button" class="fmt-tab" data-filter="track">Titres</button>
+          <button type="button" class="fmt-tab" data-filter="album">Albums</button>
+          <button type="button" class="fmt-tab" data-filter="artist">Artistes</button>
+          <button type="button" class="fmt-tab" data-filter="playlist">Playlists</button>
+        </div>
+        <p id="spotify-search-summary" class="meta-sub"></p>
+        <div id="spotify-results"></div>
+      </section>
+
+      <div id="spotify-error" class="error hidden"></div>
+
+      <section id="spotify-card" class="card hidden">
+        <div class="thumb-wrap">
+          <img id="spotify-cover" src="" alt="Pochette Spotify">
+          <span id="spotify-kind" class="badge badge-playlist">ALBUM</span>
+        </div>
+        <div class="card-body">
+          <div class="meta-top">
+            <h2 id="spotify-title"></h2>
+            <p id="spotify-artist" class="meta-sub"></p>
+          </div>
+          <div>
+            <p class="meta-sub">Qualité de la source SpotiFLAC</p>
+            <div class="q-grid" id="spotify-quality-tabs">
+              <button type="button" class="q-btn" data-quality="DOLBY_ATMOS">Dolby Atmos</button>
+              <button type="button" class="q-btn" data-quality="HI_RES_LOSSLESS">Hi-Res Max</button>
+              <button type="button" class="q-btn" data-quality="HI_RES">Hi-Res</button>
+              <button type="button" class="q-btn active" data-quality="LOSSLESS">Lossless</button>
+              <button type="button" class="q-btn" data-quality="HIGH">Haute</button>
+              <button type="button" class="q-btn" data-quality="LOW">Basse</button>
+            </div>
+          </div>
+          <div>
+            <p class="meta-sub">Format de sortie</p>
+            <div class="fmt-tabs" id="spotify-format-tabs">
+              <button type="button" class="fmt-tab active" data-format="flac">FLAC</button>
+              <button type="button" class="fmt-tab" data-format="alac">ALAC (.m4a)</button>
+              <button type="button" class="fmt-tab" data-format="wavpack">WavPack</button>
+              <button type="button" class="fmt-tab" data-format="tta">TTA</button>
+              <button type="button" class="fmt-tab" data-format="wav">WAV</button>
+              <button type="button" class="fmt-tab" data-format="aiff">AIFF</button>
+              <button type="button" class="fmt-tab" data-format="mp3">MP3</button>
+            </div>
+          </div>
+          <div id="spotify-mp3-bitrate" class="hidden">
+            <p class="meta-sub">Débit MP3</p>
+            <div class="q-grid" id="spotify-bitrate-tabs">
+              <button type="button" class="q-btn" data-bitrate="128k">128 kb/s</button>
+              <button type="button" class="q-btn" data-bitrate="192k">192 kb/s</button>
+              <button type="button" class="q-btn" data-bitrate="256k">256 kb/s</button>
+              <button type="button" class="q-btn active" data-bitrate="320k">320 kb/s</button>
+            </div>
+          </div>
+          <details>
+            <summary>Réglages SpotiFLAC avancés</summary>
+            <p><label><input id="setting-embed-lyrics" type="checkbox" checked> Intégrer les paroles aux métadonnées</label></p>
+            <p><label><input id="setting-save-lrc" type="checkbox"> Enregistrer aussi les paroles en fichier .lrc</label></p>
+            <p><label><input id="setting-word-lyrics" type="checkbox" checked> Paroles Apple mot à mot quand disponibles</label></p>
+            <p><label><input id="setting-canvas" type="checkbox"> Sauvegarder le Spotify Canvas quand disponible</label></p>
+            <p><label><input id="setting-metadata" type="checkbox" checked> Enrichir les métadonnées et la pochette</label></p>
+            <p><label><input id="setting-track-numbers" type="checkbox" checked> Numéroter les pistes</label></p>
+            <p><label><input id="setting-artist-folders" type="checkbox"> Classer dans un dossier artiste</label></p>
+            <p><label><input id="setting-album-folders" type="checkbox"> Classer dans un dossier album</label></p>
+            <p><label><input id="setting-playlist-folders" type="checkbox"> Créer un dossier pour chaque playlist</label></p>
+            <p><label><input id="setting-first-artist" type="checkbox"> N’écrire que le premier artiste</label></p>
+            <p><label><input id="setting-featuring" type="checkbox" checked> Conserver les artistes invités</label></p>
+            <p><label><input id="setting-fallback" type="checkbox" checked> Autoriser les fournisseurs de secours</label></p>
+            <p><label><input id="setting-keep-original" type="checkbox"> Conserver l’original après conversion</label></p>
+            <p><label><input id="setting-verify-hires" type="checkbox"> Vérifier les faux Hi-Res (plus lent)</label></p>
+            <p><label for="setting-concurrency">Téléchargements simultanés</label>
+              <select id="setting-concurrency">
+                <option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option>
+              </select>
+            </p>
+          </details>
+          <div>
+            <p class="meta-sub">Pistes (<span id="spotify-track-count">0</span>)</p>
+            <div id="spotify-tracks"></div>
+          </div>
+          <button id="spotify-download-btn" class="dl-btn">Télécharger</button>
+        </div>
+      </section>
+
+      <section id="spotify-progress" class="card hidden">
+        <div class="prog-head">
+          <span id="spotify-progress-label">Démarrage...</span>
+          <span id="spotify-progress-pct">0%</span>
+        </div>
+        <div class="prog-track"><div id="spotify-progress-fill" class="prog-fill"></div></div>
+        <div class="prog-meta">
+          <span id="spotify-progress-current"></span>
+          <div>
+            <span id="spotify-progress-speed"></span>
+            <span id="spotify-progress-eta"></span>
+          </div>
+        </div>
+      </section>
+
+      <section id="spotify-done" class="card done-card hidden">
+        <span class="done-check">✓</span>
+        <div class="done-info">
+          <strong>Terminé</strong>
+          <span id="spotify-done-name"></span>
+        </div>
+        <a id="spotify-save-link" href="#" class="save-btn">Télécharger</a>
+      </section>
+    </main>
+  </div>
+  <script src="/static/spotify.js?v=4"></script>
+</body>
+</html>

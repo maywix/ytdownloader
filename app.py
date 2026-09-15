@@ -1,3 +1,4 @@
+import asyncio
 import io
 import importlib.metadata
 import json
@@ -16,9 +17,11 @@ import requests
 from flask import Flask, render_template, request, jsonify, send_file, Response, after_this_request
 import yt_dlp
 import mutagen
+from SpotiFLAC import AsyncSpotiFLAC
 from mutagen.flac import FLAC, Picture
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3, APIC
+from mutagen.id3 import ID3, APIC, USLT
+from mutagen.mp4 import MP4, MP4Cover
 
 
 def _load_dotenv():
@@ -41,6 +44,18 @@ app = Flask(__name__)
 
 DOWNLOAD_DIR = Path("/tmp/ytdlp-downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
+SPOTIFLAC_REGISTRY = os.environ.get(
+    "SPOTIFLAC_REGISTRY",
+    "https://raw.githubusercontent.com/spotiflacapp/SpotiFLAC-Extension/main/registry.json",
+)
+SPOTIFLAC_SERVICES = [
+    service.strip()
+    for service in os.environ.get(
+        "SPOTIFLAC_SERVICES",
+        "ext:tidal-web,ext:qobuz-web,ext:deezer,ext:amazon",
+    ).split(",")
+    if service.strip()
+]
 
 # Nettoyage des fichiers orphelins au démarrage
 for _orphan in DOWNLOAD_DIR.iterdir():
@@ -129,6 +144,7 @@ def _parse_spotify_url(url: str) -> dict | None:
                 "artist": artist,
                 "track_number": 1,
                 "duration": fmt_duration((entity.get("duration") or 0) // 1000),
+                "duration_seconds": (entity.get("duration") or 0) // 1000,
                 "query": f"{artist} - {title}" if artist else title,
             })
         else:
@@ -140,6 +156,7 @@ def _parse_spotify_url(url: str) -> dict | None:
                     "artist": t_artist,
                     "track_number": idx,
                     "duration": fmt_duration((t.get("duration") or 0) // 1000),
+                    "duration_seconds": (t.get("duration") or 0) // 1000,
                     "query": f"{t_artist} - {t_title}" if t_artist else t_title,
                 })
 
@@ -290,7 +307,28 @@ def _clean(s: str, maxlen: int = 80) -> str:
     return "".join(c for c in s if c not in r'\/:*?"<>|')[:maxlen]
 
 
-def _embed_music_metadata(filepath: Path, title: str, artist: str, album: str, track_num: int = 1, total_tracks: int = 1, cover_url: str = ""):
+def _fetch_lyrics(title: str, artist: str, album: str, duration: int | None = None) -> str:
+    """Retourne les paroles de LRCLIB lorsque le morceau est référencé."""
+    params = {"track_name": title, "artist_name": artist, "album_name": album}
+    if duration:
+        params["duration"] = duration
+
+    try:
+        response = requests.get(
+            "https://lrclib.net/api/get",
+            params=params,
+            headers={"User-Agent": "YTDown/1.0 (https://github.com/maywix/ytdownloader)"},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("plainLyrics") or data.get("syncedLyrics") or ""
+    except Exception:
+        pass
+    return ""
+
+
+def _embed_music_metadata(filepath: Path, title: str, artist: str, album: str, track_num: int = 1, total_tracks: int = 1, cover_url: str = "", duration: int | None = None):
     """Incruste les métadonnées ID3/FLAC et la pochette d'album dans le fichier audio."""
     try:
         cover_data = None
@@ -302,6 +340,7 @@ def _embed_music_metadata(filepath: Path, title: str, artist: str, album: str, t
             except Exception:
                 pass
 
+        lyrics = _fetch_lyrics(title, artist, album, duration)
         ext = filepath.suffix.lower()
         if ext == ".flac":
             audio = FLAC(str(filepath))
@@ -309,6 +348,8 @@ def _embed_music_metadata(filepath: Path, title: str, artist: str, album: str, t
             audio["artist"] = artist
             audio["album"] = album
             audio["tracknumber"] = f"{track_num}/{total_tracks}"
+            if lyrics:
+                audio["lyrics"] = lyrics
             if cover_data:
                 pic = Picture()
                 pic.type = 3
@@ -339,7 +380,23 @@ def _embed_music_metadata(filepath: Path, title: str, artist: str, album: str, t
                     desc="Cover",
                     data=cover_data
                 ))
+                if lyrics:
+                    id3.delall("USLT")
+                    id3.add(USLT(encoding=3, lang="eng", desc="", text=lyrics))
                 id3.save()
+
+        elif ext in (".m4a", ".mp4"):
+            audio = MP4(str(filepath))
+            audio["\xa9nam"] = title
+            audio["\xa9ART"] = artist
+            audio["aART"] = artist
+            audio["\xa9alb"] = album
+            audio["trkn"] = [(track_num, total_tracks)]
+            if lyrics:
+                audio["\xa9lyr"] = lyrics
+            if cover_data:
+                audio["covr"] = [MP4Cover(cover_data, imageformat=MP4Cover.FORMAT_JPEG)]
+            audio.save()
     except Exception as e:
         print(f"Erreur d incrustation des tags pour {filepath}: {e}")
 
@@ -347,6 +404,11 @@ def _embed_music_metadata(filepath: Path, title: str, artist: str, album: str, t
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/spotify")
+def spotify():
+    return render_template("spotify.html")
 
 
 @app.route("/api/version")
@@ -491,36 +553,55 @@ def _search_soundcloud(q: str, limit: int = 12) -> list:
 
 
 def _search_spotify(q: str, limit: int = 12) -> list:
-    token = _get_spotify_token()
-    if token:
-        try:
-            resp = requests.get(
-                "https://api.spotify.com/v1/search",
-                params={"q": q, "type": "track", "limit": limit},
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                out = []
-                for t in data.get("tracks", {}).get("items", []):
-                    images = t.get("album", {}).get("images", [])
-                    thumb = images[1]["url"] if len(images) > 1 else (images[0]["url"] if images else "")
-                    artist = ", ".join(a["name"] for a in t.get("artists", []))
-                    title = t.get("name", "")
-                    out.append({
-                        "title": title,
-                        "artist": artist,
-                        "album": t.get("album", {}).get("name", ""),
-                        "thumbnail": thumb,
-                        "duration": fmt_duration((t.get("duration_ms") or 0) // 1000),
-                        "query": f"{artist} - {title}",
-                    })
-                return out
-        except Exception:
-            pass
+    """Search Spotify through SpotiFLAC's own metadata client.
 
-    return _search_youtube(f"{q} audio", limit)
+    Do not silently substitute YouTube results here: selecting a result on
+    the SpotiFLAC page must always give the downloader a Spotify URL.
+    """
+    async def _search_with_spotiflac():
+        async with AsyncSpotiFLAC(
+            output_dir=str(DOWNLOAD_DIR),
+            sync_extensions=False,
+        ) as client:
+            return await client.search(q, limit=limit)
+
+    try:
+        found = asyncio.run(_search_with_spotiflac())
+    except Exception as exc:
+        raise RuntimeError(f"La recherche Spotify via SpotiFLAC a échoué : {exc}") from exc
+
+    results = []
+    for track in found.get("tracks", []):
+        results.append({
+            "type": "track",
+            "title": getattr(track, "title", ""),
+            "artist": getattr(track, "artists", ""),
+            "album": getattr(track, "album", ""),
+            "thumbnail": getattr(track, "cover_url", ""),
+            "duration": fmt_duration((getattr(track, "duration_ms", 0) or 0) // 1000),
+            "duration_seconds": (getattr(track, "duration_ms", 0) or 0) // 1000,
+            "url": getattr(track, "external_url", ""),
+        })
+    for collection_type, label in (("albums", "album"), ("playlists", "playlist")):
+        for item in found.get(collection_type, []):
+            results.append({
+                "type": label,
+                "title": item.get("name", ""),
+                "artist": item.get("artists", "") or item.get("owner", ""),
+                "album": "",
+                "thumbnail": item.get("cover_url", ""),
+                "url": item.get("external_url", ""),
+            })
+    for artist in found.get("artists", []):
+        results.append({
+            "type": "artist",
+            "title": artist.get("name", ""),
+            "artist": "",
+            "album": "",
+            "thumbnail": artist.get("cover_url", ""),
+            "url": artist.get("external_url", ""),
+        })
+    return [item for item in results if item["url"]]
 
 
 @app.route("/api/search")
@@ -634,72 +715,66 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
             tracks = spoti_data.get("tracks") or []
             album_title = spoti_data.get("title") or "Album"
             album_artist = spoti_data.get("artist") or "Artiste"
-            album_cover = spoti_data.get("thumbnail") or ""
+            spotify_url = spoti_data.get("url") or (tracks[0].get("url") if tracks else "")
+            if not spotify_url:
+                raise ValueError("Lien Spotify manquant pour le téléchargement lossless")
 
-            state["total"] = len(tracks)
+            state["total"] = len(tracks) or 1
             state["current"] = 0
             state["status"] = "downloading"
+            settings = spoti_data.get("settings") or {}
+            source_quality = settings.get("source_quality", "LOSSLESS")
+            transcode_to = settings.get("transcode_to", "flac")
+            if source_quality not in {"LOSSLESS", "HI_RES_LOSSLESS", "HI_RES", "DOLBY_ATMOS", "HIGH", "LOW"}:
+                raise ValueError("Qualité SpotiFLAC invalide")
+            if transcode_to not in {"flac", "alac", "wavpack", "tta", "wav", "aiff", "mp3", None}:
+                raise ValueError("Format de sortie SpotiFLAC invalide")
+            bitrate = settings.get("transcode_bitrate", "320k")
+            if bitrate not in {"128k", "192k", "256k", "320k"}:
+                raise ValueError("Débit MP3 invalide")
+
+            state["current_title"] = "Recherche d'une source SpotiFLAC..."
 
             out_dir = DOWNLOAD_DIR / download_id
             out_dir.mkdir(exist_ok=True)
 
-            ext_map = {"flac": ".flac", "mp3": ".mp3", "m4a": ".m4a"}
-            chosen_ext = ext_map.get(fmt, ".flac")
+            async def _run_spotiflac():
+                async with AsyncSpotiFLAC(
+                    output_dir=str(out_dir),
+                    services=SPOTIFLAC_SERVICES,
+                    registries=[SPOTIFLAC_REGISTRY],
+                    quality=source_quality,
+                    use_track_numbers=settings.get("use_track_numbers", True),
+                    use_album_track_numbers=settings.get("use_album_track_numbers", True),
+                    use_artist_subfolders=settings.get("use_artist_subfolders", False),
+                    use_album_subfolders=settings.get("use_album_subfolders", False),
+                    create_playlist_subfolders=settings.get("create_playlist_subfolders", False),
+                    allow_fallback=settings.get("allow_fallback", True),
+                    first_artist_only=settings.get("first_artist_only", False),
+                    include_featuring=settings.get("include_featuring", True),
+                    embed_lyrics=settings.get("embed_lyrics", True),
+                    save_lrc=settings.get("save_lrc", False),
+                    apple_lyrics_word_by_word=settings.get("apple_lyrics_word_by_word", True),
+                    save_canvas=settings.get("save_canvas", False),
+                    enrich_metadata=settings.get("enrich_metadata", True),
+                    transcode_to=transcode_to,
+                    transcode_bitrate=bitrate,
+                    transcode_keep_original=settings.get("transcode_keep_original", False),
+                    verify_hires=settings.get("verify_hires", False),
+                    max_concurrent_downloads=settings.get("max_concurrent_downloads", 2),
+                ) as client:
+                    return await client.download_track(spotify_url)
 
-            for idx, track in enumerate(tracks, 1):
-                state["current"] = idx
-                state["current_title"] = f"{idx}/{len(tracks)}: {track['artist']} - {track['title']}"
-                state["progress"] = ((idx - 1) / len(tracks)) * 100
-
-                query = track.get("query") or f"{track['artist']} - {track['title']} audio"
-                clean_title = _clean(f"{idx:02d} - {track['artist']} - {track['title']}")
-                file_stem = str(out_dir / clean_title)
-                out_tmpl = f"{file_stem}.%(ext)s"
-
-                codec = fmt if fmt in ("flac", "mp3", "m4a") else "flac"
-                bitrate = quality if quality in ("128", "256", "320") else "320"
-
-                ydl_opts = {
-                    "outtmpl": out_tmpl,
-                    "quiet": True,
-                    "no_warnings": True,
-                    "format": "bestaudio/best",
-                    "js_runtimes": {"node": {}},
-                    "postprocessors": [{
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": codec,
-                        "preferredquality": bitrate if codec == "mp3" else "0",
-                    }],
-                }
-
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.extract_info(f"ytsearch1:{query}", download=True)
-
-                    final_file = Path(f"{file_stem}{chosen_ext}")
-                    if not final_file.exists():
-                        found = list(out_dir.glob(f"{clean_title}.*"))
-                        if found:
-                            final_file = found[0]
-
-                    if final_file.exists():
-                        _embed_music_metadata(
-                            filepath=final_file,
-                            title=track["title"],
-                            artist=track["artist"],
-                            album=album_title,
-                            track_num=idx,
-                            total_tracks=len(tracks),
-                            cover_url=album_cover,
-                        )
-                except Exception as e_track:
-                    print(f"Erreur morceau {track['title']}: {e_track}")
+            failed_tracks = asyncio.run(_run_spotiflac())
+            files = [file for file in out_dir.rglob("*") if file.suffix.lower() in {".flac", ".m4a", ".wv", ".tta", ".wav", ".aiff", ".mp3"}]
+            if failed_tracks or not files:
+                raise RuntimeError("Aucun fournisseur SpotiFLAC n'a fourni le contenu demandé")
 
             state["status"] = "done"
             state["progress"] = 100
+            state["current"] = state["total"]
             state["filepath"] = str(out_dir)
-            fmt_upper = fmt.upper()
-            state["filename"] = f"{_clean(album_artist)} - {_clean(album_title)} ({fmt_upper})"
+            state["filename"] = f"{_clean(album_artist)} - {_clean(album_title)} ({source_quality})"
 
         except Exception as e:
             state["status"] = "error"
@@ -898,9 +973,11 @@ def serve_file(download_id):
     if d.get("is_playlist"):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in sorted(filepath.iterdir()):
+            # SpotiFLAC may nest tracks inside artist/album folders.  The old
+            # top-level-only loop created an empty ZIP in that valid case.
+            for f in sorted(filepath.rglob("*")):
                 if f.is_file():
-                    zf.write(f, f.name)
+                    zf.write(f, f.relative_to(filepath))
         buf.seek(0)
         shutil.rmtree(filepath, ignore_errors=True)
         downloads.pop(download_id, None)

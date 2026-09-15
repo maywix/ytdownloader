@@ -7,8 +7,12 @@ services:
     volumes:
       # Les fichiers téléchargés survivent aux redémarrages
       - ./downloads:/app/downloads
+      # Extensions, fournisseurs et configuration SpotiFLAC persistants
+      - ./spotiflac:/root/.spotiflac
     restart: always
     env_file:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - SPOTIFLAC_REGISTRY=https://raw.githubusercontent.com/spotiflacapp/SpotiFLAC-Extension/main/registry.json
+      - SPOTIFLAC_SERVICES=ext:tidal-web,ext:qobuz-web,ext:deezer,ext:amazon

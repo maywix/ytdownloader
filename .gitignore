@@ -6,3 +6,4 @@ downloads/*
 cookies.txt
 .update_state.json
 *.log
+spotiflac/
