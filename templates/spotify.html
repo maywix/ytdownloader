@@ -90,31 +90,51 @@
               <button type="button" class="q-btn active" data-bitrate="320k">320 kb/s</button>
             </div>
           </div>
-          <details>
-            <summary>Réglages SpotiFLAC avancés</summary>
-            <p><label><input id="setting-embed-lyrics" type="checkbox" checked> Intégrer les paroles aux métadonnées</label></p>
-            <p><label><input id="setting-save-lrc" type="checkbox"> Enregistrer aussi les paroles en fichier .lrc</label></p>
-            <p><label><input id="setting-word-lyrics" type="checkbox" checked> Paroles Apple mot à mot quand disponibles</label></p>
-            <p><label><input id="setting-canvas" type="checkbox"> Sauvegarder le Spotify Canvas quand disponible</label></p>
-            <p><label><input id="setting-metadata" type="checkbox" checked> Enrichir les métadonnées et la pochette</label></p>
-            <p><label><input id="setting-track-numbers" type="checkbox" checked> Numéroter les pistes</label></p>
-            <p><label><input id="setting-artist-folders" type="checkbox"> Classer dans un dossier artiste</label></p>
-            <p><label><input id="setting-album-folders" type="checkbox"> Classer dans un dossier album</label></p>
-            <p><label><input id="setting-playlist-folders" type="checkbox"> Créer un dossier pour chaque playlist</label></p>
-            <p><label><input id="setting-first-artist" type="checkbox"> N’écrire que le premier artiste</label></p>
-            <p><label><input id="setting-featuring" type="checkbox" checked> Conserver les artistes invités</label></p>
-            <p><label><input id="setting-fallback" type="checkbox" checked> Autoriser les fournisseurs de secours</label></p>
-            <p><label><input id="setting-keep-original" type="checkbox"> Conserver l’original après conversion</label></p>
-            <p><label><input id="setting-verify-hires" type="checkbox"> Vérifier les faux Hi-Res (plus lent)</label></p>
-            <p><label for="setting-concurrency">Téléchargements simultanés</label>
-              <select id="setting-concurrency">
-                <option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option>
-              </select>
-            </p>
+          <details class="adv-settings" id="spotify-advanced">
+            <summary>Réglages avancés <span class="summary-hint">paroles · classement · sources</span></summary>
+            <div class="settings-groups">
+              <div class="settings-group">
+                <h4>Paroles &amp; métadonnées</h4>
+                <label class="toggle"><input id="setting-embed-lyrics" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Intégrer les paroles</span></label>
+                <label class="toggle"><input id="setting-save-lrc" type="checkbox"><span class="switch"></span><span class="toggle-text">Fichier .lrc séparé</span></label>
+                <label class="toggle"><input id="setting-word-lyrics" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Paroles Apple mot à mot</span></label>
+                <label class="toggle"><input id="setting-canvas" type="checkbox"><span class="switch"></span><span class="toggle-text">Spotify Canvas</span></label>
+                <label class="toggle"><input id="setting-metadata" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Enrichir métadonnées &amp; pochette</span></label>
+              </div>
+              <div class="settings-group">
+                <h4>Classement des fichiers</h4>
+                <label class="toggle"><input id="setting-track-numbers" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Numéroter les pistes</span></label>
+                <label class="toggle"><input id="setting-artist-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par artiste</span></label>
+                <label class="toggle"><input id="setting-album-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par album</span></label>
+                <label class="toggle"><input id="setting-playlist-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par playlist</span></label>
+                <label class="toggle"><input id="setting-first-artist" type="checkbox"><span class="switch"></span><span class="toggle-text">Premier artiste uniquement</span></label>
+              </div>
+              <div class="settings-group">
+                <h4>Sources &amp; conversion</h4>
+                <label class="toggle"><input id="setting-featuring" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Conserver les featurings</span></label>
+                <label class="toggle"><input id="setting-fallback" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Fournisseurs de secours</span></label>
+                <label class="toggle"><input id="setting-keep-original" type="checkbox"><span class="switch"></span><span class="toggle-text">Garder l'original après conversion</span></label>
+                <label class="toggle"><input id="setting-verify-hires" type="checkbox"><span class="switch"></span><span class="toggle-text">Vérifier les faux Hi-Res (plus lent)</span></label>
+              </div>
+              <div class="settings-group">
+                <h4>Performance</h4>
+                <label class="toggle toggle-select"><span class="toggle-text">Téléchargements simultanés</span>
+                  <select id="setting-concurrency">
+                    <option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option>
+                  </select>
+                </label>
+              </div>
+            </div>
           </details>
           <div>
-            <p class="meta-sub">Pistes (<span id="spotify-track-count">0</span>)</p>
-            <div id="spotify-tracks"></div>
+            <div class="tracks-head">
+              <p class="meta-sub">Pistes (<span id="spotify-track-count">0</span>) · <span id="spotify-selected-count">0</span> sélectionnée(s)</p>
+              <div class="track-tools">
+                <button type="button" class="mini-btn" id="spotify-check-all">Tout</button>
+                <button type="button" class="mini-btn" id="spotify-uncheck-none">Aucun</button>
+              </div>
+            </div>
+            <div id="spotify-tracks" class="track-list"></div>
           </div>
           <button id="spotify-download-btn" class="dl-btn">Télécharger</button>
         </div>
@@ -145,6 +165,6 @@
       </section>
     </main>
   </div>
-  <script src="/static/spotify.js?v=4"></script>
+  <script src="/static/spotify.js?v=5"></script>
 </body>
 </html>

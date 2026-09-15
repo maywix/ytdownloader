@@ -73,6 +73,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   downloadButton.addEventListener('click', startDownload);
 
+  document.getElementById('spotify-check-all').addEventListener('click', () => {
+    tracks.querySelectorAll('.track-check').forEach((box) => { box.checked = true; });
+    updateSelection();
+  });
+  document.getElementById('spotify-uncheck-none').addEventListener('click', () => {
+    tracks.querySelectorAll('.track-check').forEach((box) => { box.checked = false; });
+    updateSelection();
+  });
+
   async function analyseUrl() {
     const url = urlInput.value.trim();
     if (!url) return;
@@ -101,18 +110,68 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('spotify-cover').src = data.thumbnail || '';
     document.getElementById('spotify-title').textContent = data.title || '';
     document.getElementById('spotify-artist').textContent = data.artist || '';
-    document.getElementById('spotify-track-count').textContent = data.total_tracks || 0;
     const single = data.kind === 'track' || data.total_tracks === 1;
-    document.getElementById('spotify-kind').textContent = single ? 'TITRE' : data.kind === 'playlist' ? 'PLAYLIST' : 'ALBUM';
-    downloadButton.textContent = single ? 'Télécharger le morceau' : `Télécharger (${data.total_tracks} pistes)`;
+    document.getElementById('spotify-track-count').textContent = data.total_tracks || 0;
+    const kindLabels = { track: 'TITRE', playlist: 'PLAYLIST', album: 'ALBUM', artist: 'ARTISTE' };
+    document.getElementById('spotify-kind').textContent = single ? 'TITRE' : (kindLabels[data.kind] || 'ALBUM');
 
+    const list = data.tracks || [];
     tracks.replaceChildren();
-    (data.tracks || []).forEach((track, index) => {
-      const row = document.createElement('p');
-      row.className = 'meta-sub';
-      row.textContent = `${track.track_number || index + 1}. ${track.artist ? `${track.artist} — ` : ''}${track.title || ''}`;
+    list.forEach((track, index) => {
+      const position = track.track_number || index + 1;
+      const row = document.createElement('label');
+      row.className = 'track-row';
+
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.className = 'track-check';
+      box.checked = true;
+      box.dataset.index = position;
+
+      const knob = document.createElement('span');
+      knob.className = 'switch';
+
+      const num = document.createElement('span');
+      num.className = 'track-num';
+      num.textContent = position;
+
+      const text = document.createElement('span');
+      text.className = 'track-text';
+      text.append(Object.assign(document.createElement('strong'), { textContent: track.title || '' }));
+      if (track.artist) text.append(Object.assign(document.createElement('span'), { textContent: ` — ${track.artist}` }));
+      if (track.album && data.kind === 'artist') text.append(Object.assign(document.createElement('em'), { textContent: ` · ${track.album}` }));
+
+      row.append(box, knob, num, text);
       tracks.appendChild(row);
     });
+
+    if (list.length > 1) {
+      tracks.querySelectorAll('.track-check').forEach((box) => {
+        box.addEventListener('change', updateSelection);
+      });
+    }
+    updateSelection();
+  }
+
+  function selectedIndices() {
+    return Array.from(tracks.querySelectorAll('.track-check'))
+      .filter((box) => box.checked)
+      .map((box) => Number(box.dataset.index));
+  }
+
+  function updateSelection() {
+    const boxes = Array.from(tracks.querySelectorAll('.track-check'));
+    const total = boxes.length;
+    const count = boxes.filter((box) => box.checked).length;
+    document.getElementById('spotify-selected-count').textContent = count;
+    if (total > 1) {
+      downloadButton.textContent = count === 0
+        ? 'Aucune piste sélectionnée'
+        : (count === total ? `Télécharger (${total} pistes)` : `Télécharger la sélection (${count}/${total})`);
+    } else {
+      downloadButton.textContent = 'Télécharger le morceau';
+    }
+    downloadButton.disabled = count === 0;
   }
 
   async function searchMusic() {
@@ -167,19 +226,9 @@ document.addEventListener('DOMContentLoaded', () => {
       result.append(cover, title, meta);
 
       const selectResult = () => {
-        if (item.type === 'artist') {
-          searchInput.value = item.title || '';
-          selectedSearchFilter = 'all';
-          document.querySelectorAll('#spotify-search-filters .fmt-tab').forEach((tab) => {
-            const active = tab.dataset.filter === 'all';
-            tab.classList.toggle('active', active);
-            tab.setAttribute('aria-pressed', String(active));
-          });
-          searchMusic();
-          return;
-        }
-        // The result is a Spotify URL supplied by SpotiFLAC's metadata client.
-        // Analyse it first so album and playlist links keep their real tracks.
+        // L'URL vient du client de métadonnées SpotiFLAC. Pour un artiste,
+        // le backend résout toute la discographie ; pour le reste, on analyse
+        // d'abord le lien pour garder les vraies pistes album/playlist.
         urlInput.value = item.url || '';
         hide(searchResults);
         analyseUrl();
@@ -204,12 +253,20 @@ document.addEventListener('DOMContentLoaded', () => {
     resetProgress();
     show(progressCard);
 
+    const total = (spotifyData.tracks || []).length;
+    const selected = selectedIndices();
+    const payloadTracks = total > 1 && selected.length < total ? selected : null;
+
     try {
       const response = await fetch('/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          spoti_data: { ...spotifyData, settings: collectSettings() },
+          spoti_data: {
+            ...spotifyData,
+            settings: collectSettings(),
+            ...(payloadTracks ? { selected_tracks: payloadTracks } : {}),
+          },
           format: selectedFormat,
           quality: selectedQuality,
           mode: 'spoti_album',

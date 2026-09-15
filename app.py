@@ -197,6 +197,55 @@ def _parse_spotify_url(url: str) -> dict | None:
         print(f"Erreur parsing Spotify: {e}")
         return None
 
+def _parse_artist_url(url: str) -> str | None:
+    m = re.search(r"open\.spotify\.com/(?:intl-[a-zA-Z-]+/)?artist/([a-zA-Z0-9]+)", url)
+    return m.group(1) if m else None
+
+
+def _fetch_artist_discography(url: str) -> dict | None:
+    """Récupère toute la discographie d'un artiste via SpotiFLAC (métadonnées seulement)."""
+    artist_id = _parse_artist_url(url)
+    if not artist_id:
+        return None
+
+    async def _run():
+        async with AsyncSpotiFLAC(output_dir=str(DOWNLOAD_DIR), sync_extensions=False) as client:
+            meta = client._get_metadata_client()
+            return await meta.get_artist_albums_async(artist_id)
+
+    try:
+        profile, discography = asyncio.run(_run())
+    except Exception as e:
+        print(f"Erreur discographie artiste: {e}")
+        return None
+
+    name = (profile.get("profile") or {}).get("name", "Artiste")
+    tracks = []
+    for idx, t in enumerate(discography, 1):
+        tracks.append({
+            "title": getattr(t, "title", ""),
+            "artist": getattr(t, "artists", ""),
+            "album": getattr(t, "album", ""),
+            "track_number": idx,
+            "duration": fmt_duration((getattr(t, "duration_ms", 0) or 0) // 1000),
+            "duration_seconds": (getattr(t, "duration_ms", 0) or 0) // 1000,
+            "query": f"{getattr(t, 'artists', '')} - {getattr(t, 'title', '')}",
+            "url": getattr(t, "external_url", ""),
+        })
+
+    return {
+        "type": "spotify_artist",
+        "kind": "artist",
+        "id": artist_id,
+        "title": name,
+        "artist": "",
+        "thumbnail": profile.get("avatar", ""),
+        "total_tracks": len(tracks),
+        "tracks": tracks,
+        "url": url,
+    }
+
+
 # ── Auto-updater ──────────────────────────────────────────────────────────────
 
 UPDATE_INTERVAL = 48 * 3600  # secondes
@@ -458,6 +507,10 @@ def get_music_info():
     url = request.args.get("url", "").strip()
     if not url:
         return jsonify({"error": "URL manquante"}), 400
+
+    artist_data = _fetch_artist_discography(url)
+    if artist_data:
+        return jsonify(artist_data)
 
     sp_data = _parse_spotify_url(url)
     if sp_data:
@@ -761,6 +814,31 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
             out_dir = DOWNLOAD_DIR / download_id
             out_dir.mkdir(exist_ok=True)
 
+            # Sélection de pistes (style deemix) : la page envoie selected_tracks,
+            # la liste des positions 1-based cochées. Si tout est coché (ou rien
+            # n'est envoyé), on laisse SpotiFLAC résoudre la collection entière.
+            track_urls: list[str] = []
+            selected = spoti_data.get("selected_tracks")
+            if selected is None and spoti_data.get("kind") == "artist" and tracks:
+                # Une URL d'artiste n'est pas une collection SpotiFLAC :
+                # on passe toujours par la liste de pistes explicite.
+                selected = [t.get("track_number") for t in tracks]
+            if selected is not None and tracks:
+                want = {int(i) for i in selected}
+                if all(t.get("url") for t in tracks):
+                    track_urls = [t["url"] for t in tracks if t.get("track_number") in want]
+                elif spotify_url:
+                    async def _resolve_collection():
+                        async with AsyncSpotiFLAC(output_dir=str(out_dir), sync_extensions=False) as client:
+                            _, resolved = await client.get_playlist(spotify_url)
+                            return [
+                                t.external_url
+                                for i, t in enumerate(resolved, 1)
+                                if i in want and t.external_url
+                            ]
+                    track_urls = asyncio.run(_resolve_collection())
+                state["total"] = len(track_urls) or 1
+
             async def _run_spotiflac():
                 async with AsyncSpotiFLAC(
                     output_dir=str(out_dir),
@@ -786,11 +864,13 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
                     verify_hires=settings.get("verify_hires", False),
                     max_concurrent_downloads=settings.get("max_concurrent_downloads", 2),
                 ) as client:
+                    if track_urls:
+                        return await client.download_tracks(track_urls)
                     return await client.download_track(spotify_url)
 
             failed_tracks = asyncio.run(_run_spotiflac())
             files = [file for file in out_dir.rglob("*") if file.suffix.lower() in {".flac", ".m4a", ".wv", ".tta", ".wav", ".aiff", ".mp3"}]
-            if failed_tracks or not files:
+            if not files or (isinstance(failed_tracks, list) and failed_tracks):
                 raise RuntimeError("Aucun fournisseur SpotiFLAC n'a fourni le contenu demandé")
 
             state["status"] = "done"
