@@ -23,12 +23,19 @@ body {
 .app {
   max-width: 860px;
   margin: 0 auto;
-  padding: 64px 32px 100px;
+  padding: 72px 32px 110px;
+}
+
+/* Un peu d'air entre chaque bloc direct de <main> (sections, cartes...) ;
+   les margin-bottom existants (ex. .card) fusionnent avec cette valeur au
+   lieu de s'additionner (comportement standard du flux normal). */
+main > * + * {
+  margin-top: 28px;
 }
 
 /* ─── Header ─────────────────────────────── */
 header {
-  margin-bottom: 40px;
+  margin-bottom: 48px;
 }
 
 .header-top {
@@ -234,10 +241,10 @@ header {
 
 /* Card body */
 .card-body {
-  padding: 24px;
+  padding: 26px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
 .meta-top { display: flex; flex-direction: column; gap: 5px; }
@@ -312,7 +319,7 @@ header {
 .settings-panel {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
 .settings-hint {
@@ -769,4 +776,82 @@ footer {
   background: #fff;
   border-color: #fff;
   color: #000;
+}
+
+/* ─── Sélecteur de service (menu déroulant) ─ */
+.service-switch { position: relative; }
+
+.service-switch-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.service-switch-btn:hover, .service-switch-btn[aria-expanded="true"] {
+  border-color: #555;
+}
+
+.service-switch-btn .chevron { flex-shrink: 0; transition: transform 0.15s; }
+.service-switch-btn[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+
+.service-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 300px;
+  max-width: 90vw;
+  background: var(--card);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 6px;
+  z-index: 20;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+}
+
+.service-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  text-decoration: none;
+  color: var(--text);
+  transition: background 0.15s;
+}
+
+.service-item:hover { background: rgba(255,255,255,0.06); }
+
+.service-item strong {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.service-item span { font-size: 11px; color: var(--muted2); line-height: 1.4; }
+
+.service-item.current { background: rgba(255,255,255,0.04); cursor: default; }
+
+.service-item.current strong::after {
+  content: 'Ici';
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: 1px solid var(--border2);
+  border-radius: 2px;
+  padding: 1px 5px;
+  margin-left: auto;
 }

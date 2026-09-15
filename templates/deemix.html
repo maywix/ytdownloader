@@ -11,8 +11,17 @@
     <header>
       <div class="header-top">
         <h1 class="logo">Deemix <span class="beta-badge">BÊTA</span></h1>
-        <a class="fmt-tab" href="/">YTDown</a>
-        <a class="fmt-tab" href="/spotify">SpotiFLAC</a>
+        <div class="service-switch" id="service-switch">
+          <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
+            <span>Deemix</span>
+            <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+          <div class="service-menu hidden" id="service-menu">
+            <a class="service-item" href="/"><strong>YTDown</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
+            <a class="service-item" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
+            <a class="service-item current" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
+          </div>
+        </div>
       </div>
       <p class="tagline">Téléchargez de la musique en qualité CD (FLAC lossless) depuis Deezer, via un lien Deezer direct ou un lien Spotify. Nécessite qu'un administrateur ait configuré un ARL Deezer valide.</p>
     </header>
@@ -96,6 +105,7 @@
       </section>
     </main>
   </div>
+  <script src="/static/nav.js"></script>
   <script src="/static/deemix.js?v=1"></script>
 </body>
 </html>

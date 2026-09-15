@@ -11,8 +11,17 @@
     <header>
       <div class="header-top">
         <h1 class="logo">SpotiFLAC <span class="beta-badge">BÊTA</span></h1>
-        <a class="fmt-tab" href="/">YTDown</a>
-        <a class="fmt-tab" href="/deemix">Deemix</a>
+        <div class="service-switch" id="service-switch">
+          <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
+            <span>SpotiFLAC</span>
+            <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+          <div class="service-menu hidden" id="service-menu">
+            <a class="service-item" href="/"><strong>YTDown</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
+            <a class="service-item current" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
+            <a class="service-item" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
+          </div>
+        </div>
       </div>
       <p class="tagline">Téléchargez de la musique en haute qualité (Lossless, Hi-Res...) depuis Spotify, Tidal, Qobuz, Deezer, Amazon Music et SoundCloud. Recherchez un titre ou collez un lien direct vers un morceau, un album, un artiste ou une playlist.</p>
     </header>
@@ -186,6 +195,7 @@
       </section>
     </main>
   </div>
+  <script src="/static/nav.js"></script>
   <script src="/static/spotify.js?v=5"></script>
 </body>
 </html>

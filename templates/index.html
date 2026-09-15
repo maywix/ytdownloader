@@ -14,8 +14,17 @@
     <header>
       <div class="header-top">
         <h1 class="logo">YTDown <span style="font-size:16px; font-weight:400; color:var(--muted2); font-style:italic;">SpotiFLAC</span></h1>
-        <a class="fmt-tab" href="/spotify">SpotiFLAC</a>
-        <a class="fmt-tab" href="/deemix">Deemix</a>
+        <div class="service-switch" id="service-switch">
+          <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
+            <span>YTDown</span>
+            <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+          <div class="service-menu hidden" id="service-menu">
+            <a class="service-item current" href="/"><strong>YTDown</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
+            <a class="service-item" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
+            <a class="service-item" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
+          </div>
+        </div>
         <div class="version-badge hidden" id="version-badge">
           <span class="version-dot"></span>
           <span id="v-text">yt-dlp</span>
@@ -211,6 +220,7 @@
 
   </div>
 
+  <script src="/static/nav.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
