@@ -778,6 +778,7 @@ def get_music_info():
     url = request.args.get("url", "").strip()
     if not url:
         return jsonify({"error": "URL manquante"}), 400
+    url = _expand_spotify_short_link(url)
 
     artist_data = _fetch_artist_discography(url)
     if artist_data:
@@ -1556,10 +1557,26 @@ def _parse_deezer_url(url: str) -> tuple[str, str] | None:
             url = resp.url
         except Exception:
             pass
-    m = re.search(r"deezer\.com/(?:[a-z]{2}/)?(track|album|playlist)/(\d+)", url)
+    m = re.search(r"deezer\.com/(?:[a-z]{2}/)?(track|album|artist|playlist)/(\d+)", url)
     if not m:
         return None
     return m.group(1), m.group(2)
+
+
+def _expand_spotify_short_link(url: str) -> str:
+    """Déplie les liens de partage courts (spotify.link/...) vers leur URL
+    open.spotify.com canonique, avant tout regex de parsing."""
+    if "spotify.link" in url or "spotify.app.link" in url:
+        try:
+            resp = requests.head(url, allow_redirects=True, timeout=10)
+            return resp.url
+        except Exception:
+            try:
+                resp = requests.get(url, allow_redirects=True, timeout=10)
+                return resp.url
+            except Exception:
+                pass
+    return url
 
 
 def _resolve_deemix_link(url: str) -> dict:
@@ -1569,6 +1586,7 @@ def _resolve_deemix_link(url: str) -> dict:
     connexion ; Spotify : la même page embed que /spotify) — aucun ARL requis
     ici, seulement pour le téléchargement lui-même.
     """
+    url = _expand_spotify_short_link(url)
     deezer_match = _parse_deezer_url(url)
     if deezer_match:
         kind, item_id = deezer_match
@@ -1627,6 +1645,28 @@ def _resolve_deemix_link(url: str) -> dict:
                         "duration_seconds": tr.get("duration", 0),
                         "preview": tr.get("preview", ""),
                     } for idx, tr in enumerate(tracks)],
+                }
+            if kind == "artist":
+                # "Top titres" Deezer : rapide (un seul appel), et c'est
+                # exactement ce que le téléchargement résout aussi (voir
+                # _resolve_deemix_download_url) pour rester cohérent.
+                ar = dz.api.get_artist(item_id)
+                top = dz.api.get_artist_top(item_id, limit=50).get("data") or []
+                return {
+                    "type": "deemix", "kind": "artist", "url": url,
+                    "title": ar.get("name", ""),
+                    "artist": "",
+                    "thumbnail": ar.get("picture_xl") or ar.get("picture_big", ""),
+                    "total_tracks": len(top),
+                    "tracks": [{
+                        "title": t.get("title", ""),
+                        "artist": (t.get("artist") or {}).get("name", ""),
+                        "album": (t.get("album") or {}).get("title", ""),
+                        "track_number": idx + 1,
+                        "duration": fmt_duration(t.get("duration")),
+                        "duration_seconds": t.get("duration", 0),
+                        "preview": t.get("preview", ""),
+                    } for idx, t in enumerate(top)],
                 }
         except Exception as exc:
             raise RuntimeError(f"Impossible de récupérer ce lien Deezer : {exc}") from exc
@@ -1695,6 +1735,66 @@ def deemix_download():
     return jsonify({"download_id": download_id})
 
 
+def _resolve_deemix_artist_id(url: str) -> str | None:
+    """Si l'URL (Deezer native ou Spotify) désigne un artiste, renvoie son id
+    Deezer numérique — sinon None (lien track/album/playlist classique)."""
+    deezer_match = _parse_deezer_url(url)
+    if deezer_match and deezer_match[0] == "artist":
+        return deezer_match[1]
+
+    expanded = _expand_spotify_short_link(url)
+    artist_id = _parse_artist_url(expanded)
+    if artist_id:
+        artist_data = _fetch_artist_discography(expanded)
+        name = (artist_data or {}).get("title", "")
+        if not name:
+            raise RuntimeError("Impossible de résoudre cet artiste Spotify")
+        found = Deezer().api.search_artist(name, limit=1).get("data") or []
+        if not found:
+            raise RuntimeError(f"Artiste introuvable sur Deezer : {name}")
+        return str(found[0]["id"])
+
+    return None
+
+
+def _generate_deezer_artist_top(dz, artist_id: str, bitrate: int):
+    """Reproduit deemix.itemgen.generateArtistTopItem, qui appelle une
+    méthode GW renommée côté deezer-py (get_artist_toptracks a été renommée
+    get_artist_top_tracks) et plante avec un AttributeError sur les versions
+    actuelles des deux paquets — même logique, juste le bon nom de méthode."""
+    from deemix.itemgen import generatePlaylistItem
+
+    artist_api = dz.api.get_artist(artist_id)
+    playlist_api = {
+        "id": f"{artist_api['id']}_top_track",
+        "title": f"{artist_api['name']} - Top Tracks",
+        "description": f"Top Tracks for {artist_api['name']}",
+        "duration": 0,
+        "public": True,
+        "is_loved_track": False,
+        "collaborative": False,
+        "nb_tracks": 0,
+        "fans": artist_api["nb_fan"],
+        "link": f"https://www.deezer.com/artist/{artist_api['id']}/top_track",
+        "share": None,
+        "picture": artist_api["picture"],
+        "picture_small": artist_api["picture_small"],
+        "picture_medium": artist_api["picture_medium"],
+        "picture_big": artist_api["picture_big"],
+        "picture_xl": artist_api["picture_xl"],
+        "checksum": None,
+        "tracklist": f"https://api.deezer.com/artist/{artist_api['id']}/top",
+        "creation_date": "XXXX-00-00",
+        "creator": {"id": f"art_{artist_api['id']}", "name": artist_api["name"], "type": "user"},
+        "type": "playlist",
+    }
+    top_tracks_gw = dz.gw.get_artist_top_tracks(artist_id, limit=50)
+    return generatePlaylistItem(
+        dz, playlist_api["id"], bitrate,
+        playlistAPI=playlist_api, playlistTracksAPI=top_tracks_gw,
+    )
+
+
 def _deemix_download_thread(download_id: str, url: str, quality: str):
     state = downloads[download_id]
     out_dir = DOWNLOAD_DIR / download_id
@@ -1706,20 +1806,25 @@ def _deemix_download_thread(download_id: str, url: str, quality: str):
             raise RuntimeError("Aucun ARL Deezer valide n'est disponible. Contactez l'administrateur.")
 
         bitrate = DEEMIX_QUALITY_MAP[quality]
-        plugins = _get_deemix_plugins()
-        if "spotify" in url.lower() and "spotify" not in plugins:
-            raise RuntimeError(
-                "Les liens Spotify nécessitent SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET côté "
-                "serveur pour Deemix. Utilisez un lien Deezer direct en attendant."
-            )
 
         state["current_title"] = "Résolution du lien..."
+        artist_id = _resolve_deemix_artist_id(url)
+
         try:
-            download_object = generateDownloadObject(dz, url, bitrate, plugins, listener=None)
+            if artist_id:
+                download_object = _generate_deezer_artist_top(dz, artist_id, bitrate)
+            else:
+                plugins = _get_deemix_plugins()
+                if "spotify" in url.lower() and "spotify" not in plugins:
+                    raise RuntimeError(
+                        "Les liens Spotify nécessitent SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET côté "
+                        "serveur pour Deemix. Utilisez un lien Deezer direct en attendant."
+                    )
+                download_object = generateDownloadObject(dz, url, bitrate, plugins, listener=None)
         except GenerationError as exc:
             raise RuntimeError(f"Lien non reconnu ou indisponible sur Deezer : {exc}") from exc
         if isinstance(download_object, list):
-            raise RuntimeError("Les liens artiste ne sont pas pris en charge par Deemix pour l'instant.")
+            raise RuntimeError("Ce lien correspond à plusieurs éléments distincts, non pris en charge par Deemix.")
 
         total = getattr(download_object, "size", 1) or 1
         state["total"] = total
