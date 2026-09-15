@@ -7,3 +7,4 @@ cookies.txt
 .update_state.json
 *.log
 spotiflac/
+.venv-mac/

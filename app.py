@@ -70,6 +70,28 @@ for _orphan in DOWNLOAD_DIR.iterdir():
 COOKIES_FILE = Path("cookies.txt")
 downloads: dict = {}
 
+# ── Cache des recherches ──────────────────────────────────────────────────────
+
+SEARCH_CACHE_TTL = 300  # secondes
+_search_cache: dict = {}
+_search_cache_lock = threading.Lock()
+
+
+def _search_cached(key: str, fn):
+    now = time.time()
+    with _search_cache_lock:
+        hit = _search_cache.get(key)
+        if hit and now - hit[0] < SEARCH_CACHE_TTL:
+            return hit[1]
+
+    results = fn()
+    with _search_cache_lock:
+        _search_cache[key] = (now, results)
+        # garde le cache borne (~50 dernieres requetes)
+        while len(_search_cache) > 50:
+            _search_cache.pop(next(iter(_search_cache)))
+    return results
+
 # ── Spotify / SpotiFLAC Parser ────────────────────────────────────────────────
 
 _spotify_token_cache: dict = {"token": None, "expires_at": 0}
@@ -266,10 +288,12 @@ def _base_ydl_opts(out_tmpl: str, progress_hook, is_playlist: bool) -> dict:
 
 
 def _info_ydl_opts(extra: dict | None = None) -> dict:
+    # Pas de "js_runtimes" ici : la recherche et les metadonnees n'en ont pas
+    # besoin, et lancer un processus Node a chaque extraction ralentit tout.
     opts = {
         "quiet": True,
         "no_warnings": True,
-        "js_runtimes": {"node": {}},
+        "socket_timeout": 15,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -462,6 +486,8 @@ def get_info():
         })
 
     try:
+        # Une seule extraction suffit : "extract_flat: in_playlist" aplatit les
+        # playlists mais renvoie deja l'info COMPLETE pour une video seule.
         with yt_dlp.YoutubeDL(_info_ydl_opts({"extract_flat": "in_playlist"})) as ydl:
             info = ydl.extract_info(url, download=False)
 
@@ -483,10 +509,7 @@ def get_info():
                 "audio_only": is_audio_only,
             })
 
-        with yt_dlp.YoutubeDL(_info_ydl_opts()) as ydl:
-            full = ydl.extract_info(url, download=False)
-
-        fmts = full.get("formats") or []
+        fmts = info.get("formats") or []
         heights = sorted(set(
             f["height"] for f in fmts
             if f.get("height") and f.get("vcodec") not in ("none", None, "")
@@ -495,11 +518,11 @@ def get_info():
 
         return jsonify({
             "type": "video",
-            "title": full.get("title", ""),
-            "thumbnail": full.get("thumbnail", ""),
-            "duration": fmt_duration(full.get("duration")),
-            "channel": full.get("channel") or full.get("uploader", ""),
-            "views": fmt_views(full.get("view_count")),
+            "title": info.get("title", ""),
+            "thumbnail": info.get("thumbnail", ""),
+            "duration": fmt_duration(info.get("duration")),
+            "channel": info.get("channel") or info.get("uploader", ""),
+            "views": fmt_views(info.get("view_count")),
             "url": url,
             "max_height": max_height,
             "audio_only": is_audio_only,
@@ -613,11 +636,11 @@ def search():
 
     try:
         if kind == "youtube":
-            results = _search_youtube(q)
+            results = _search_cached(("yt", q), lambda: _search_youtube(q))
         elif kind == "soundcloud":
-            results = _search_soundcloud(q)
+            results = _search_cached(("sc", q), lambda: _search_soundcloud(q))
         elif kind == "spotify":
-            results = _search_spotify(q)
+            results = _search_cached(("sp", q), lambda: _search_spotify(q))
         else:
             return jsonify({"error": "Type de recherche inconnu"}), 400
         return jsonify({"results": results})
