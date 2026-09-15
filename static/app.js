@@ -33,7 +33,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const videoCard = document.getElementById('video-card');
   const playlistCard = document.getElementById('playlist-card');
-  const spotiCard = document.getElementById('spoti-card');
   const progressCard = document.getElementById('progress-card');
   const doneCard = document.getElementById('done-card');
   const errorMsg = document.getElementById('error-msg');
@@ -54,21 +53,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const pCount = document.getElementById('p-count');
   const pDlBtn = document.getElementById('p-dl-btn');
 
-  // SpotiFLAC Card Elements
-  const spotiCover = document.getElementById('spoti-cover');
-  const spotiBadge = document.getElementById('spoti-badge');
-  const spotiTitle = document.getElementById('spoti-title');
-  const spotiArtist = document.getElementById('spoti-artist');
-  const spotiCount = document.getElementById('spoti-count');
-  const spotiTrackList = document.getElementById('spoti-track-list');
-  const spotiDlBtn = document.getElementById('spoti-dl-btn');
-
   let currentUrl = '';
   let curFmt = 'mp4';
   let curQ = '1080';
   let pCurFmt = 'mp4';
-  let spotiFmt = 'flac';
-  let currentSpotiData = null;
+
+  const STATE_KEY = 'ytdown_state';
+  function saveState(patch) {
+    YTPersist.save(STATE_KEY, { ...(YTPersist.load(STATE_KEY) || {}), ...patch });
+  }
 
   fetchBtn.addEventListener('click', runFetch);
   urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') runFetch(); });
@@ -103,12 +96,16 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      if (data.type === 'spotify' && data.spotify_data) {
-        renderSpotiCard(data.spotify_data);
+      if (data.type === 'spotify') {
+        // Les liens Spotify se téléchargent uniquement depuis la page SpotiFLAC
+        // dédiée (sources multiples, qualité, réglages) : pas de copie limitée ici.
+        window.location.href = `/spotify?url=${encodeURIComponent(raw)}`;
       } else if (data.type === 'playlist') {
         renderPlaylistCard(data);
+        saveState({ lastView: 'playlist', lastUrl: currentUrl, lastData: data, downloadId: null, downloadKind: null });
       } else {
         renderVideoCard(data);
+        saveState({ lastView: 'video', lastUrl: currentUrl, lastData: data, downloadId: null, downloadKind: null });
       }
     } catch {
       showError('Serveur inaccessible');
@@ -138,7 +135,23 @@ document.addEventListener('DOMContentLoaded', () => {
     videoChannel.textContent = data.channel || '';
     videoViews.textContent = data.views || '';
     videoDuration.textContent = data.duration || '';
+    applyAudioOnly(!!data.audio_only);
     show(videoCard);
+  }
+
+  // Source audio uniquement (SoundCloud, Bandcamp...) : ni vidéo ni résolution,
+  // ni FLAC (le flux source est déjà compressé) — seulement MP3 et M4A (AAC).
+  const hiddenWhenAudioOnly = new Set(['mp4', 'mkv', 'best', 'flac']);
+  function applyAudioOnly(isAudioOnly) {
+    document.querySelectorAll('#fmt-tabs .fmt-tab').forEach((chip) => {
+      const hide = isAudioOnly && hiddenWhenAudioOnly.has(chip.dataset.fmt);
+      chip.classList.toggle('hidden', hide);
+    });
+    document.getElementById('quality-section').style.display = isAudioOnly ? 'none' : '';
+    if (isAudioOnly && hiddenWhenAudioOnly.has(curFmt)) {
+      const mp3Tab = document.querySelector('#fmt-tabs .fmt-tab[data-fmt="mp3"]');
+      if (mp3Tab) mp3Tab.click();
+    }
   }
 
   function renderPlaylistCard(data) {
@@ -149,28 +162,6 @@ document.addEventListener('DOMContentLoaded', () => {
     show(playlistCard);
   }
 
-  function renderSpotiCard(data) {
-    currentSpotiData = data;
-    spotiCover.src = data.thumbnail || '';
-    spotiTitle.textContent = data.title || '';
-    spotiArtist.textContent = data.artist ? `Par ${data.artist}` : '';
-    spotiCount.textContent = data.total_tracks || 1;
-
-    const isSingle = data.kind === 'track' || data.total_tracks === 1;
-    spotiBadge.textContent = isSingle ? 'TITRE' : (data.kind === 'playlist' ? 'PLAYLIST' : 'ALBUM');
-    spotiDlBtn.textContent = isSingle ? 'Télécharger le morceau' : `Télécharger l'Album complet (${data.total_tracks} pistes) (.zip)`;
-
-    spotiTrackList.innerHTML = '';
-    (data.tracks || []).forEach((t, i) => {
-      const div = document.createElement('div');
-      div.style.cssText = 'display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.05);';
-      div.innerHTML = `<span>${t.track_number || i+1}. ${t.title}</span><span style="color:var(--muted);">${t.artist || ''}</span>`;
-      spotiTrackList.appendChild(div);
-    });
-
-    show(spotiCard);
-  }
-
   // ── Format Selection Chips ──
   document.querySelectorAll('#fmt-tabs .fmt-tab').forEach(chip => {
     chip.addEventListener('click', () => {
@@ -178,14 +169,6 @@ document.addEventListener('DOMContentLoaded', () => {
       chip.classList.add('active');
       curFmt = chip.dataset.fmt;
       document.getElementById('quality-section').style.display = (curFmt === 'mp3' || curFmt === 'flac' || curFmt === 'm4a') ? 'none' : 'block';
-    });
-  });
-
-  document.querySelectorAll('#spoti-fmt-tabs .fmt-tab').forEach(chip => {
-    chip.addEventListener('click', () => {
-      document.querySelectorAll('#spoti-fmt-tabs .fmt-tab').forEach(c => c.classList.remove('active'));
-      chip.classList.add('active');
-      spotiFmt = chip.dataset.spotiFmt;
     });
   });
 
@@ -277,27 +260,9 @@ document.addEventListener('DOMContentLoaded', () => {
         <p style="font-size: 11px; color: var(--muted);">${item.artist || item.channel || ''}</p>
       `;
       card.addEventListener('click', () => {
-        if (item.query) {
-          const spotiData = {
-            title: item.title,
-            artist: item.artist,
-            thumbnail: item.thumbnail,
-            kind: 'track',
-            total_tracks: 1,
-            tracks: [{
-              title: item.title,
-              artist: item.artist,
-              track_number: 1,
-              duration: item.duration,
-              query: item.query
-            }]
-          };
-          renderSpotiCard(spotiData);
-        } else {
-          urlInput.value = item.url;
-          document.getElementById('tab-url-btn').click();
-          runFetch();
-        }
+        urlInput.value = item.url;
+        document.getElementById('tab-url-btn').click();
+        runFetch();
       });
       container.appendChild(card);
     });
@@ -306,38 +271,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Downloads & Polling ──
   dlBtn.addEventListener('click', () => startDownload('single', curFmt, curQ));
   pDlBtn.addEventListener('click', () => startDownload('playlist', pCurFmt, '1080'));
-
-  spotiDlBtn.addEventListener('click', () => {
-    if (!currentSpotiData) return;
-    startSpotiDownload(currentSpotiData, spotiFmt);
-  });
-
-  async function startSpotiDownload(spotiData, fmt) {
-    spotiDlBtn.disabled = true;
-    hideAllCards();
-    resetProgress();
-    show(progressCard);
-
-    try {
-      const res = await fetch('/api/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ spoti_data: spotiData, format: fmt, mode: 'spoti_album' }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        showError(data.error || 'Erreur lors du démarrage');
-        hide(progressCard);
-        spotiDlBtn.disabled = false;
-        return;
-      }
-      pollProgress(data.download_id, spotiDlBtn);
-    } catch {
-      showError('Serveur inaccessible');
-      hide(progressCard);
-      spotiDlBtn.disabled = false;
-    }
-  }
 
   async function startDownload(mode, fmt, quality) {
     const btn = mode === 'playlist' ? pDlBtn : dlBtn;
@@ -359,6 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.disabled = false;
         return;
       }
+      saveState({ downloadId: data.download_id, downloadKind: mode });
       pollProgress(data.download_id, btn);
     } catch {
       showError('Serveur inaccessible');
@@ -379,6 +313,7 @@ document.addEventListener('DOMContentLoaded', () => {
           stopPoll();
           showError(data.error);
           if (btn) btn.disabled = false;
+          saveState({ downloadId: null, downloadKind: null });
           return;
         }
 
@@ -393,6 +328,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (btn) btn.disabled = false;
           hide(progressCard);
           showError(data.error || 'Erreur lors du traitement');
+          saveState({ downloadId: null, downloadKind: null });
         }
       } catch { /* retry */ }
     }, 600);
@@ -444,7 +380,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function showError(msg) { errorMsg.textContent = msg; show(errorMsg); }
   function show(el) { if (el) el.classList.remove('hidden'); }
   function hide(el) { if (el) el.classList.add('hidden'); }
-  function hideAllCards() { [videoCard, playlistCard, spotiCard, progressCard, doneCard, errorMsg, urlSearchResults].forEach(hide); }
+  function hideAllCards() { [videoCard, playlistCard, progressCard, doneCard, errorMsg, urlSearchResults].forEach(hide); }
 
   function setLoading(on) {
     fetchBtn.disabled = on;
@@ -457,5 +393,58 @@ document.addEventListener('DOMContentLoaded', () => {
     musicBtnLabel.classList.toggle('hidden', on);
     musicBtnSpinner.classList.toggle('hidden', !on);
   }
+
+  // ── Reprise après rechargement / fermeture de fenêtre ──
+  async function restoreState() {
+    const state = YTPersist.load(STATE_KEY);
+    if (!state) return;
+
+    if (state.downloadId) {
+      const btn = state.downloadKind === 'playlist' ? pDlBtn : dlBtn;
+      hideAllCards();
+      resetProgress();
+      show(progressCard);
+      try {
+        const res = await fetch(`/api/progress/${state.downloadId}`);
+        const data = await res.json();
+        if (data.error) {
+          // Le serveur a redémarré entre-temps (état en mémoire perdu) : on
+          // retombe sur la dernière recherche/analyse au lieu de rester bloqué.
+          hide(progressCard);
+          saveState({ downloadId: null, downloadKind: null });
+          restoreLastView(state);
+          return;
+        }
+        updateProgressUI(data);
+        if (data.status === 'done') {
+          showDone(state.downloadId, data.filename, data.is_playlist);
+        } else if (data.status === 'error') {
+          hide(progressCard);
+          showError(data.error || 'Erreur pendant le téléchargement.');
+          saveState({ downloadId: null, downloadKind: null });
+        } else {
+          pollProgress(state.downloadId, btn);
+        }
+      } catch {
+        hide(progressCard);
+      }
+      return;
+    }
+
+    restoreLastView(state);
+  }
+
+  function restoreLastView(state) {
+    if (!state.lastData) return;
+    currentUrl = state.lastUrl || '';
+    urlInput.value = state.lastUrl || '';
+    if (state.lastView === 'video') {
+      renderVideoCard(state.lastData);
+    } else if (state.lastView === 'playlist') {
+      renderPlaylistCard(state.lastData);
+    }
+  }
+
+  restoreState();
 
 });

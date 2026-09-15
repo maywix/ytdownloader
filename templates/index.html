@@ -83,34 +83,6 @@
 
       <div id="error-msg" class="error hidden"></div>
 
-      <!-- CARTE SPOTIFLAC / ALBUM SPOTIFY -->
-      <div id="spoti-card" class="card hidden">
-        <div class="thumb-wrap" style="aspect-ratio: 1/1; max-width: 240px; margin: 20px auto 0; border-radius: 4px;">
-          <img id="spoti-cover" src="" alt="Cover">
-          <span id="spoti-badge" class="badge badge-playlist">ALBUM</span>
-        </div>
-        <div class="card-body">
-          <div class="meta-top">
-            <h2 id="spoti-title"></h2>
-            <p id="spoti-artist" class="meta-sub"></p>
-          </div>
-
-          <div class="label">Format de téléchargement SpotiFLAC</div>
-          <div class="fmt-tabs" id="spoti-fmt-tabs">
-            <button class="fmt-tab active" data-spoti-fmt="flac">FLAC HD (Lossless)</button>
-            <button class="fmt-tab" data-spoti-fmt="mp3">MP3 320k</button>
-            <button class="fmt-tab" data-spoti-fmt="m4a">M4A 256k</button>
-          </div>
-
-          <div id="spoti-track-list-wrap" style="margin-top: 8px; border-top: 1px solid var(--border); padding-top: 12px;">
-            <div class="label" style="margin-bottom: 8px;">Pistes incluses (<span id="spoti-count">0</span>)</div>
-            <div id="spoti-track-list" style="max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted2);"></div>
-          </div>
-
-          <button id="spoti-dl-btn" class="dl-btn">Télécharger l'Album complet (.zip)</button>
-        </div>
-      </div>
-
       <!-- CARTE VIDÉO UNIQUE -->
       <div id="video-card" class="card hidden">
         <div class="thumb-wrap">
@@ -220,6 +192,7 @@
 
   </div>
 
+  <script src="/static/persist.js"></script>
   <script src="/static/nav.js"></script>
   <script src="/static/app.js"></script>
 </body>

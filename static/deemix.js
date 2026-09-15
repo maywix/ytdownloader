@@ -22,6 +22,11 @@ document.addEventListener('DOMContentLoaded', () => {
   let latestSearchResults = [];
   let selectedSearchFilter = 'all';
 
+  const STATE_KEY = 'deemix_state';
+  function saveState(patch) {
+    YTPersist.save(STATE_KEY, { ...(YTPersist.load(STATE_KEY) || {}), ...patch });
+  }
+
   const previewAudio = new Audio();
   let previewButton = null;
   function togglePreview(url, button) {
@@ -98,6 +103,7 @@ document.addEventListener('DOMContentLoaded', () => {
       deemixData = data;
       renderMusic(data);
       show(card);
+      saveState({ lastUrl: url, lastData: data, downloadId: null });
     } catch (error) {
       showError(error.message || 'Serveur inaccessible.');
     } finally {
@@ -235,6 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.error || 'Le téléchargement n’a pas pu démarrer.');
+      saveState({ downloadId: data.download_id });
       pollProgress(data.download_id);
     } catch (error) {
       hide(progressCard);
@@ -263,6 +270,7 @@ document.addEventListener('DOMContentLoaded', () => {
           downloadButton.disabled = false;
           hide(progressCard);
           showError(data.error || 'Erreur pendant le téléchargement.');
+          saveState({ downloadId: null });
         }
       } catch (error) {
         clearInterval(polling);
@@ -307,4 +315,54 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function show(element) { element.classList.remove('hidden'); }
   function hide(element) { element.classList.add('hidden'); }
+
+  // ── Reprise après rechargement / fermeture de fenêtre ──
+  async function restoreState() {
+    const state = YTPersist.load(STATE_KEY);
+    if (!state) return;
+
+    if (state.downloadId) {
+      hide(card);
+      resetProgress();
+      show(progressCard);
+      try {
+        const response = await fetch(`/api/progress/${state.downloadId}`);
+        const data = await response.json();
+        if (data.error) {
+          hide(progressCard);
+          saveState({ downloadId: null });
+          restoreLastView(state);
+          return;
+        }
+        updateProgress(data);
+        if (data.status === 'done') {
+          hide(progressCard);
+          document.getElementById('deemix-done-name').textContent = data.filename || '';
+          document.getElementById('deemix-save-link').href = `/api/file/${state.downloadId}`;
+          show(doneCard);
+        } else if (data.status === 'error') {
+          hide(progressCard);
+          showError(data.error || 'Erreur pendant le téléchargement.');
+          saveState({ downloadId: null });
+        } else {
+          pollProgress(state.downloadId);
+        }
+      } catch {
+        hide(progressCard);
+      }
+      return;
+    }
+
+    restoreLastView(state);
+  }
+
+  function restoreLastView(state) {
+    if (!state.lastData) return;
+    urlInput.value = state.lastUrl || '';
+    deemixData = state.lastData;
+    renderMusic(state.lastData);
+    show(card);
+  }
+
+  restoreState();
 });
