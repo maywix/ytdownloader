@@ -1747,11 +1747,19 @@ def _deemix_download_thread(download_id: str, url: str, quality: str):
 
         title = getattr(download_object, "title", "") or "Deemix"
         artist = getattr(download_object, "artist", "") or ""
+        base_name = _clean(f"{artist} - {title}".strip(" -")) or "deemix"
         state["status"] = "done"
         state["progress"] = 100
         state["current"] = total
-        state["filepath"] = str(out_dir)
-        state["filename"] = _clean(f"{artist} - {title}".strip(" -")) or "deemix"
+        if total > 1:
+            # /api/file/<id> zippe le dossier entier quand is_playlist est vrai.
+            state["filepath"] = str(out_dir)
+            state["filename"] = base_name
+        else:
+            # Un seul fichier : il faut pointer dessus (pas sur le dossier) et
+            # garder son extension, sinon send_file() échoue avec un IsADirectoryError.
+            state["filepath"] = str(files[0])
+            state["filename"] = f"{base_name}{files[0].suffix}"
     except Exception as e:
         state["status"] = "error"
         state["error"] = str(e)
