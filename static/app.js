@@ -63,6 +63,8 @@ document.addEventListener('DOMContentLoaded', () => {
     YTPersist.save(STATE_KEY, patch);
   }
 
+  const DOWNLOAD_KEY = 'ytdown_download';
+
   fetchBtn.addEventListener('click', runFetch);
   urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') runFetch(); });
 
@@ -292,6 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.disabled = false;
         return;
       }
+      YTPersist.save(DOWNLOAD_KEY, { downloadId: data.download_id, mode });
       pollProgress(data.download_id, btn);
     } catch {
       showError('Serveur inaccessible');
@@ -312,6 +315,7 @@ document.addEventListener('DOMContentLoaded', () => {
           stopPoll();
           showError(data.error);
           if (btn) btn.disabled = false;
+          YTPersist.clear(DOWNLOAD_KEY);
           return;
         }
 
@@ -321,11 +325,13 @@ document.addEventListener('DOMContentLoaded', () => {
           stopPoll();
           if (btn) btn.disabled = false;
           showDone(id, data.filename, data.is_playlist);
+          YTPersist.clear(DOWNLOAD_KEY);
         } else if (data.status === 'error') {
           stopPoll();
           if (btn) btn.disabled = false;
           hide(progressCard);
           showError(data.error || 'Erreur lors du traitement');
+          YTPersist.clear(DOWNLOAD_KEY);
         }
       } catch { /* retry */ }
     }, 600);
@@ -418,6 +424,32 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   restoreSearchState();
+
+  // ── Le téléchargement continue côté serveur même après un F5 : on retrouve
+  // sa progression s'il tourne encore, sans rien afficher s'il est déjà fini
+  // ou en erreur (pour ne pas faire réapparaître un vieux résultat) ──
+  async function resumeActiveDownload() {
+    const state = YTPersist.load(DOWNLOAD_KEY);
+    if (!state || !state.downloadId) return;
+    try {
+      const res = await fetch(`/api/progress/${state.downloadId}`);
+      const data = await res.json();
+      if (data.error || data.status === 'done' || data.status === 'error') {
+        YTPersist.clear(DOWNLOAD_KEY);
+        return;
+      }
+      const btn = state.mode === 'playlist' ? pDlBtn : dlBtn;
+      hideAllCards();
+      resetProgress();
+      updateProgressUI(data);
+      show(progressCard);
+      btn.disabled = true;
+      pollProgress(state.downloadId, btn);
+    } catch {
+      /* pas grave : au pire on rate la reprise, le téléchargement continue quand même côté serveur */
+    }
+  }
+  resumeActiveDownload();
 
   // ── Indicateur de version yt-dlp (auto-mis à jour côté serveur) ──
   async function loadVersionBadge() {

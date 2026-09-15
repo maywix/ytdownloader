@@ -27,6 +27,8 @@ document.addEventListener('DOMContentLoaded', () => {
     YTPersist.save(STATE_KEY, patch);
   }
 
+  const DOWNLOAD_KEY = 'deemix_download';
+
   const previewAudio = new Audio();
   let previewButton = null;
   function togglePreview(url, button) {
@@ -242,6 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.error || 'Le téléchargement n’a pas pu démarrer.');
+      YTPersist.save(DOWNLOAD_KEY, { downloadId: data.download_id });
       pollProgress(data.download_id);
     } catch (error) {
       hide(progressCard);
@@ -265,17 +268,20 @@ document.addEventListener('DOMContentLoaded', () => {
           document.getElementById('deemix-done-name').textContent = data.filename || '';
           document.getElementById('deemix-save-link').href = `/api/file/${downloadId}`;
           show(doneCard);
+          YTPersist.clear(DOWNLOAD_KEY);
         } else if (data.status === 'error') {
           clearInterval(polling);
           downloadButton.disabled = false;
           hide(progressCard);
           showError(data.error || 'Erreur pendant le téléchargement.');
+          YTPersist.clear(DOWNLOAD_KEY);
         }
       } catch (error) {
         clearInterval(polling);
         downloadButton.disabled = false;
         hide(progressCard);
         showError(error.message || 'Serveur inaccessible.');
+        YTPersist.clear(DOWNLOAD_KEY);
       }
     }, 700);
   }
@@ -334,6 +340,31 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   restoreSearchState();
+
+  // ── Le téléchargement continue côté serveur même après un F5 : on retrouve
+  // sa progression s'il tourne encore, sans rien afficher s'il est déjà fini
+  // ou en erreur (pour ne pas faire réapparaître un vieux résultat) ──
+  async function resumeActiveDownload() {
+    const state = YTPersist.load(DOWNLOAD_KEY);
+    if (!state || !state.downloadId) return;
+    try {
+      const response = await fetch(`/api/progress/${state.downloadId}`);
+      const data = await response.json();
+      if (data.error || data.status === 'done' || data.status === 'error') {
+        YTPersist.clear(DOWNLOAD_KEY);
+        return;
+      }
+      hide(card);
+      resetProgress();
+      updateProgress(data);
+      show(progressCard);
+      downloadButton.disabled = true;
+      pollProgress(state.downloadId);
+    } catch {
+      /* pas grave : au pire on rate la reprise, le téléchargement continue quand même côté serveur */
+    }
+  }
+  resumeActiveDownload();
 
   // ── Indicateur de version du paquet deemix (auto-mis à jour côté serveur) ──
   async function loadVersionBadge() {
