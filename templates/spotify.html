@@ -10,10 +10,11 @@
   <div class="app">
     <header>
       <div class="header-top">
-        <h1 class="logo">SpotiFLAC</h1>
+        <h1 class="logo">SpotiFLAC <span class="beta-badge">BÊTA</span></h1>
         <a class="fmt-tab" href="/">YTDown</a>
+        <a class="fmt-tab" href="/deemix">Deemix</a>
       </div>
-      <p class="tagline">Recherchez un titre ou collez un lien Spotify vers un morceau, un album ou une playlist.</p>
+      <p class="tagline">Téléchargez de la musique en haute qualité (Lossless, Hi-Res...) depuis Spotify, Tidal, Qobuz, Deezer, Amazon Music et SoundCloud. Recherchez un titre ou collez un lien direct vers un morceau, un album, un artiste ou une playlist.</p>
     </header>
 
     <main>
@@ -58,74 +59,94 @@
             <h2 id="spotify-title"></h2>
             <p id="spotify-artist" class="meta-sub"></p>
           </div>
-          <div>
-            <p class="meta-sub">Qualité de la source SpotiFLAC</p>
-            <div class="q-grid" id="spotify-quality-tabs">
-              <button type="button" class="q-btn" data-quality="DOLBY_ATMOS">Dolby Atmos</button>
-              <button type="button" class="q-btn" data-quality="HI_RES_LOSSLESS">Hi-Res Max</button>
-              <button type="button" class="q-btn" data-quality="HI_RES">Hi-Res</button>
-              <button type="button" class="q-btn active" data-quality="LOSSLESS">Lossless</button>
-              <button type="button" class="q-btn" data-quality="HIGH">Haute</button>
-              <button type="button" class="q-btn" data-quality="LOW">Basse</button>
-            </div>
+          <div class="settings-head">
+            <p class="meta-sub">Sources, qualité &amp; format</p>
+            <button type="button" class="gear-btn" id="spotify-settings-toggle" aria-expanded="false" aria-controls="spotify-settings-panel" title="Réglages SpotiFLAC">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </button>
           </div>
-          <div>
-            <p class="meta-sub">Format de sortie</p>
-            <div class="fmt-tabs" id="spotify-format-tabs">
-              <button type="button" class="fmt-tab active" data-format="flac">FLAC</button>
-              <button type="button" class="fmt-tab" data-format="alac">ALAC (.m4a)</button>
-              <button type="button" class="fmt-tab" data-format="wavpack">WavPack</button>
-              <button type="button" class="fmt-tab" data-format="tta">TTA</button>
-              <button type="button" class="fmt-tab" data-format="wav">WAV</button>
-              <button type="button" class="fmt-tab" data-format="aiff">AIFF</button>
-              <button type="button" class="fmt-tab" data-format="mp3">MP3</button>
+          <div id="spotify-settings-panel" class="settings-panel hidden">
+            <div>
+              <p class="meta-sub">Sources SpotiFLAC</p>
+              <div class="fmt-tabs" id="spotify-source-tabs">
+                <button type="button" class="fmt-tab active" data-source="ext:tidal-web" aria-pressed="true">Tidal</button>
+                <button type="button" class="fmt-tab active" data-source="ext:qobuz-web" aria-pressed="true">Qobuz</button>
+                <button type="button" class="fmt-tab active" data-source="ext:amazon" aria-pressed="true">Amazon Music</button>
+                <button type="button" class="fmt-tab active" data-source="ext:deezer" aria-pressed="true">Deezer</button>
+              </div>
+              <p class="meta-sub settings-hint">Décochez les sources inutiles : SpotiFLAC ne les essaiera plus en secours, ce qui accélère surtout le téléchargement d'un album entier.</p>
             </div>
+            <div>
+              <p class="meta-sub">Qualité de la source</p>
+              <div class="q-grid" id="spotify-quality-tabs">
+                <button type="button" class="q-btn" data-quality="HI_RES_LOSSLESS">Hi-Res Max</button>
+                <button type="button" class="q-btn" data-quality="HI_RES">Hi-Res</button>
+                <button type="button" class="q-btn active" data-quality="LOSSLESS">Lossless</button>
+                <button type="button" class="q-btn" data-quality="HIGH">Haute</button>
+                <button type="button" class="q-btn" data-quality="LOW">Basse</button>
+              </div>
+            </div>
+            <div>
+              <p class="meta-sub">Format de sortie</p>
+              <div class="fmt-tabs" id="spotify-format-tabs">
+                <button type="button" class="fmt-tab active" data-format="flac">FLAC</button>
+                <button type="button" class="fmt-tab" data-format="alac">ALAC (.m4a)</button>
+                <button type="button" class="fmt-tab" data-format="wavpack">WavPack</button>
+                <button type="button" class="fmt-tab" data-format="tta">TTA</button>
+                <button type="button" class="fmt-tab" data-format="wav">WAV</button>
+                <button type="button" class="fmt-tab" data-format="aiff">AIFF</button>
+                <button type="button" class="fmt-tab" data-format="mp3">MP3</button>
+              </div>
+            </div>
+            <div id="spotify-mp3-bitrate" class="hidden">
+              <p class="meta-sub">Débit MP3</p>
+              <div class="q-grid" id="spotify-bitrate-tabs">
+                <button type="button" class="q-btn" data-bitrate="128k">128 kb/s</button>
+                <button type="button" class="q-btn" data-bitrate="192k">192 kb/s</button>
+                <button type="button" class="q-btn" data-bitrate="256k">256 kb/s</button>
+                <button type="button" class="q-btn active" data-bitrate="320k">320 kb/s</button>
+              </div>
+            </div>
+            <details class="adv-settings" id="spotify-advanced">
+              <summary>Réglages avancés <span class="summary-hint">paroles · classement · performance</span></summary>
+              <div class="settings-groups">
+                <div class="settings-group">
+                  <h4>Paroles &amp; métadonnées</h4>
+                  <label class="toggle"><input id="setting-embed-lyrics" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Intégrer les paroles</span></label>
+                  <label class="toggle"><input id="setting-save-lrc" type="checkbox"><span class="switch"></span><span class="toggle-text">Fichier .lrc séparé</span></label>
+                  <label class="toggle"><input id="setting-word-lyrics" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Paroles Apple mot à mot</span></label>
+                  <label class="toggle"><input id="setting-canvas" type="checkbox"><span class="switch"></span><span class="toggle-text">Spotify Canvas</span></label>
+                  <label class="toggle"><input id="setting-metadata" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Enrichir métadonnées &amp; pochette</span></label>
+                </div>
+                <div class="settings-group">
+                  <h4>Classement des fichiers</h4>
+                  <label class="toggle"><input id="setting-track-numbers" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Numéroter les pistes</span></label>
+                  <label class="toggle"><input id="setting-artist-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par artiste</span></label>
+                  <label class="toggle"><input id="setting-album-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par album</span></label>
+                  <label class="toggle"><input id="setting-playlist-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par playlist</span></label>
+                  <label class="toggle"><input id="setting-first-artist" type="checkbox"><span class="switch"></span><span class="toggle-text">Premier artiste uniquement</span></label>
+                </div>
+                <div class="settings-group">
+                  <h4>Conversion</h4>
+                  <label class="toggle"><input id="setting-featuring" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Conserver les featurings</span></label>
+                  <label class="toggle"><input id="setting-fallback" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Fournisseurs de secours</span></label>
+                  <label class="toggle"><input id="setting-keep-original" type="checkbox"><span class="switch"></span><span class="toggle-text">Garder l'original après conversion</span></label>
+                  <label class="toggle"><input id="setting-verify-hires" type="checkbox"><span class="switch"></span><span class="toggle-text">Vérifier les faux Hi-Res (plus lent)</span></label>
+                </div>
+                <div class="settings-group">
+                  <h4>Performance</h4>
+                  <label class="toggle toggle-select"><span class="toggle-text">Téléchargements simultanés</span>
+                    <select id="setting-concurrency">
+                      <option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </details>
           </div>
-          <div id="spotify-mp3-bitrate" class="hidden">
-            <p class="meta-sub">Débit MP3</p>
-            <div class="q-grid" id="spotify-bitrate-tabs">
-              <button type="button" class="q-btn" data-bitrate="128k">128 kb/s</button>
-              <button type="button" class="q-btn" data-bitrate="192k">192 kb/s</button>
-              <button type="button" class="q-btn" data-bitrate="256k">256 kb/s</button>
-              <button type="button" class="q-btn active" data-bitrate="320k">320 kb/s</button>
-            </div>
-          </div>
-          <details class="adv-settings" id="spotify-advanced">
-            <summary>Réglages avancés <span class="summary-hint">paroles · classement · sources</span></summary>
-            <div class="settings-groups">
-              <div class="settings-group">
-                <h4>Paroles &amp; métadonnées</h4>
-                <label class="toggle"><input id="setting-embed-lyrics" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Intégrer les paroles</span></label>
-                <label class="toggle"><input id="setting-save-lrc" type="checkbox"><span class="switch"></span><span class="toggle-text">Fichier .lrc séparé</span></label>
-                <label class="toggle"><input id="setting-word-lyrics" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Paroles Apple mot à mot</span></label>
-                <label class="toggle"><input id="setting-canvas" type="checkbox"><span class="switch"></span><span class="toggle-text">Spotify Canvas</span></label>
-                <label class="toggle"><input id="setting-metadata" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Enrichir métadonnées &amp; pochette</span></label>
-              </div>
-              <div class="settings-group">
-                <h4>Classement des fichiers</h4>
-                <label class="toggle"><input id="setting-track-numbers" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Numéroter les pistes</span></label>
-                <label class="toggle"><input id="setting-artist-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par artiste</span></label>
-                <label class="toggle"><input id="setting-album-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par album</span></label>
-                <label class="toggle"><input id="setting-playlist-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par playlist</span></label>
-                <label class="toggle"><input id="setting-first-artist" type="checkbox"><span class="switch"></span><span class="toggle-text">Premier artiste uniquement</span></label>
-              </div>
-              <div class="settings-group">
-                <h4>Sources &amp; conversion</h4>
-                <label class="toggle"><input id="setting-featuring" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Conserver les featurings</span></label>
-                <label class="toggle"><input id="setting-fallback" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Fournisseurs de secours</span></label>
-                <label class="toggle"><input id="setting-keep-original" type="checkbox"><span class="switch"></span><span class="toggle-text">Garder l'original après conversion</span></label>
-                <label class="toggle"><input id="setting-verify-hires" type="checkbox"><span class="switch"></span><span class="toggle-text">Vérifier les faux Hi-Res (plus lent)</span></label>
-              </div>
-              <div class="settings-group">
-                <h4>Performance</h4>
-                <label class="toggle toggle-select"><span class="toggle-text">Téléchargements simultanés</span>
-                  <select id="setting-concurrency">
-                    <option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option>
-                  </select>
-                </label>
-              </div>
-            </div>
-          </details>
           <div>
             <div class="tracks-head">
               <p class="meta-sub">Pistes (<span id="spotify-track-count">0</span>) · <span id="spotify-selected-count">0</span> sélectionnée(s)</p>

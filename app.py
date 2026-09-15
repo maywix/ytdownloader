@@ -4,20 +4,33 @@ import importlib.metadata
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import time
 import uuid
 import threading
 import zipfile
+from copy import deepcopy
 from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
 
 import requests
-from flask import Flask, render_template, request, jsonify, send_file, Response, after_this_request
+from flask import (
+    Flask, render_template, request, jsonify, send_file, Response,
+    after_this_request, session, redirect, url_for, flash,
+)
+from werkzeug.security import generate_password_hash, check_password_hash
 import yt_dlp
 import mutagen
 from SpotiFLAC import AsyncSpotiFLAC
+from SpotiFLAC.core.spotify_metadata import SpotifyMetadataClient
+from deezer import Deezer, TrackFormats
+from deemix import generateDownloadObject
+from deemix.settings import load as load_deemix_settings
+from deemix.downloader import Downloader
+from deemix.itemgen import GenerationError
 from mutagen.flac import FLAC, Picture
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC, USLT
@@ -56,6 +69,226 @@ SPOTIFLAC_SERVICES = [
     ).split(",")
     if service.strip()
 ]
+# Sources que la page /spotify laisse choisir à l'utilisateur (menu réglages).
+SPOTIFLAC_ALLOWED_SERVICES = {"ext:tidal-web", "ext:qobuz-web", "ext:amazon", "ext:deezer"}
+
+# ── Comptes & configuration admin (persistés hors du dépôt, voir .gitignore) ──
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+USERS_FILE = DATA_DIR / "users.json"
+ARLS_FILE = DATA_DIR / "arls.json"
+SECRET_KEY_FILE = DATA_DIR / "secret_key.txt"
+_data_lock = threading.Lock()
+
+
+def _load_json(path: Path, default):
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return default
+
+
+def _save_json(path: Path, data) -> None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def _get_secret_key() -> str:
+    """Clé de session Flask, générée une fois puis persistée pour que les
+    sessions admin survivent aux redémarrages du conteneur."""
+    if SECRET_KEY_FILE.exists():
+        return SECRET_KEY_FILE.read_text().strip()
+    key = secrets.token_hex(32)
+    SECRET_KEY_FILE.write_text(key)
+    return key
+
+
+def _bootstrap_admin() -> None:
+    """Crée le compte admin par défaut au tout premier démarrage.
+
+    Identifiants faibles assumés (admin/1234) pour un démarrage rapide sur une
+    instance personnelle : à changer depuis /admin dès que possible via
+    ADMIN_USERNAME/ADMIN_PASSWORD ou la gestion de comptes du panneau admin.
+    """
+    with _data_lock:
+        users = _load_json(USERS_FILE, {})
+        if users:
+            return
+        username = os.environ.get("ADMIN_USERNAME", "admin")
+        password = os.environ.get("ADMIN_PASSWORD", "1234")
+        users[username] = {
+            "password_hash": generate_password_hash(password),
+            "is_admin": True,
+        }
+        _save_json(USERS_FILE, users)
+        print(f"[admin] Compte '{username}' créé avec le mot de passe par défaut '{password}'.")
+        print("[admin] Changez-le depuis /admin dès que possible.")
+
+
+app.secret_key = _get_secret_key()
+_bootstrap_admin()
+
+
+def _current_user() -> dict | None:
+    username = session.get("username")
+    if not username:
+        return None
+    user = _load_json(USERS_FILE, {}).get(username)
+    if not user:
+        return None
+    return {"username": username, **user}
+
+
+def admin_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        user = _current_user()
+        if not user or not user.get("is_admin"):
+            return redirect(url_for("admin_login", next=request.path))
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def _mask_arl(arl: str) -> str:
+    if len(arl) <= 8:
+        return "•" * len(arl)
+    return f"{arl[:4]}{'•' * (len(arl) - 8)}{arl[-4:]}"
+
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        user = _load_json(USERS_FILE, {}).get(username)
+        if user and check_password_hash(user["password_hash"], password):
+            session.clear()
+            session["username"] = username
+            session.permanent = True
+            next_url = request.args.get("next")
+            if next_url and next_url.startswith("/admin"):
+                return redirect(next_url)
+            return redirect(url_for("admin_dashboard"))
+        flash("Identifiants invalides", "error")
+    return render_template("admin_login.html")
+
+
+@app.route("/admin/logout")
+def admin_logout():
+    session.clear()
+    return redirect(url_for("admin_login"))
+
+
+@app.route("/admin")
+@admin_required
+def admin_dashboard():
+    users = _load_json(USERS_FILE, {})
+    arls = _load_json(ARLS_FILE, [])
+    users_view = sorted(
+        ({"username": name, "is_admin": bool(info.get("is_admin"))} for name, info in users.items()),
+        key=lambda u: u["username"],
+    )
+    arls_view = [
+        {
+            "id": a["id"],
+            "label": a.get("label") or "Sans nom",
+            "masked": _mask_arl(a["arl"]),
+            "account": a.get("account", ""),
+            "lossless": a.get("can_stream_lossless", False),
+            "added_at": a.get("added_at", ""),
+        }
+        for a in arls
+    ]
+    return render_template(
+        "admin.html",
+        users=users_view,
+        arls=arls_view,
+        current_user=session.get("username"),
+    )
+
+
+@app.route("/admin/users", methods=["POST"])
+@admin_required
+def admin_add_user():
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    is_admin = request.form.get("is_admin") == "on"
+    if not username or not password:
+        flash("Nom d'utilisateur et mot de passe requis", "error")
+        return redirect(url_for("admin_dashboard"))
+    with _data_lock:
+        users = _load_json(USERS_FILE, {})
+        users[username] = {"password_hash": generate_password_hash(password), "is_admin": is_admin}
+        _save_json(USERS_FILE, users)
+    flash(f"Compte '{username}' créé", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/users/<username>/delete", methods=["POST"])
+@admin_required
+def admin_delete_user(username):
+    with _data_lock:
+        users = _load_json(USERS_FILE, {})
+        target = users.get(username)
+        if not target:
+            return redirect(url_for("admin_dashboard"))
+        admins_left = sum(1 for u in users.values() if u.get("is_admin"))
+        if username == session.get("username"):
+            flash("Vous ne pouvez pas supprimer votre propre compte", "error")
+        elif target.get("is_admin") and admins_left <= 1:
+            flash("Impossible de supprimer le dernier compte admin", "error")
+        else:
+            users.pop(username, None)
+            _save_json(USERS_FILE, users)
+            flash(f"Compte '{username}' supprimé", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/arls", methods=["POST"])
+@admin_required
+def admin_add_arl():
+    arl = request.form.get("arl", "").strip()
+    label = request.form.get("label", "").strip()
+    if not arl:
+        flash("ARL manquant", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    dz = Deezer()
+    try:
+        valid = dz.login_via_arl(arl)
+    except Exception:
+        valid = False
+    if not valid:
+        flash("Cet ARL n'a pas pu se connecter à Deezer (expiré ou invalide)", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    account = dz.current_user or {}
+    with _data_lock:
+        arls = _load_json(ARLS_FILE, [])
+        arls.append({
+            "id": uuid.uuid4().hex,
+            "arl": arl,
+            "label": label or account.get("name", ""),
+            "account": account.get("name", ""),
+            "can_stream_lossless": bool(account.get("can_stream_lossless")),
+            "added_at": datetime.utcnow().isoformat(),
+        })
+        _save_json(ARLS_FILE, arls)
+    flash("ARL ajouté et validé auprès de Deezer", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/arls/<arl_id>/delete", methods=["POST"])
+@admin_required
+def admin_delete_arl(arl_id):
+    with _data_lock:
+        arls = _load_json(ARLS_FILE, [])
+        arls = [a for a in arls if a["id"] != arl_id]
+        _save_json(ARLS_FILE, arls)
+    flash("ARL supprimé", "success")
+    return redirect(url_for("admin_dashboard"))
+
 
 # Nettoyage des fichiers orphelins au démarrage
 for _orphan in DOWNLOAD_DIR.iterdir():
@@ -95,6 +328,23 @@ def _search_cached(key: str, fn):
 # ── Spotify / SpotiFLAC Parser ────────────────────────────────────────────────
 
 _spotify_token_cache: dict = {"token": None, "expires_at": 0}
+
+# Client de métadonnées SpotiFLAC (session Spotify web) réutilisé entre les
+# requêtes : (re)créer ce client à chaque recherche forçait une réauth Spotify
+# (session + token TOTP + client-token, 3 aller-retours réseau) avant même la
+# requête GraphQL de recherche elle-même, rendant chaque recherche très lente.
+# Le client se réauthentifie déjà tout seul sur un 401 (voir SpotiFLAC.core
+# .spotfetch.SpotifyWebClient.query), donc le garder en mémoire est sûr.
+_spotify_metadata_client: SpotifyMetadataClient | None = None
+_spotify_metadata_client_lock = threading.Lock()
+
+
+def _get_spotify_metadata_client() -> SpotifyMetadataClient:
+    global _spotify_metadata_client
+    with _spotify_metadata_client_lock:
+        if _spotify_metadata_client is None:
+            _spotify_metadata_client = SpotifyMetadataClient()
+        return _spotify_metadata_client
 
 
 def _get_spotify_token():
@@ -168,6 +418,7 @@ def _parse_spotify_url(url: str) -> dict | None:
                 "duration": fmt_duration((entity.get("duration") or 0) // 1000),
                 "duration_seconds": (entity.get("duration") or 0) // 1000,
                 "query": f"{artist} - {title}" if artist else title,
+                "preview": (entity.get("audioPreview") or {}).get("url", ""),
             })
         else:
             for idx, t in enumerate(raw_tracks, 1):
@@ -180,6 +431,7 @@ def _parse_spotify_url(url: str) -> dict | None:
                     "duration": fmt_duration((t.get("duration") or 0) // 1000),
                     "duration_seconds": (t.get("duration") or 0) // 1000,
                     "query": f"{t_artist} - {t_title}" if t_artist else t_title,
+                    "preview": (t.get("audioPreview") or {}).get("url", ""),
                 })
 
         return {
@@ -208,13 +460,10 @@ def _fetch_artist_discography(url: str) -> dict | None:
     if not artist_id:
         return None
 
-    async def _run():
-        async with AsyncSpotiFLAC(output_dir=str(DOWNLOAD_DIR), sync_extensions=False) as client:
-            meta = client._get_metadata_client()
-            return await meta.get_artist_albums_async(artist_id)
+    meta = _get_spotify_metadata_client()
 
     try:
-        profile, discography = asyncio.run(_run())
+        profile, discography = asyncio.run(meta.get_artist_albums_async(artist_id))
     except Exception as e:
         print(f"Erreur discographie artiste: {e}")
         return None
@@ -231,6 +480,7 @@ def _fetch_artist_discography(url: str) -> dict | None:
             "duration_seconds": (getattr(t, "duration_ms", 0) or 0) // 1000,
             "query": f"{getattr(t, 'artists', '')} - {getattr(t, 'title', '')}",
             "url": getattr(t, "external_url", ""),
+            "preview": getattr(t, "preview_url", "") or "",
         })
 
     return {
@@ -484,6 +734,11 @@ def spotify():
     return render_template("spotify.html")
 
 
+@app.route("/deemix")
+def deemix():
+    return render_template("deemix.html")
+
+
 @app.route("/api/version")
 def get_version():
     last = _upd.get("last_check")
@@ -634,15 +889,10 @@ def _search_spotify(q: str, limit: int = 12) -> list:
     Do not silently substitute YouTube results here: selecting a result on
     the SpotiFLAC page must always give the downloader a Spotify URL.
     """
-    async def _search_with_spotiflac():
-        async with AsyncSpotiFLAC(
-            output_dir=str(DOWNLOAD_DIR),
-            sync_extensions=False,
-        ) as client:
-            return await client.search(q, limit=limit)
+    meta = _get_spotify_metadata_client()
 
     try:
-        found = asyncio.run(_search_with_spotiflac())
+        found = asyncio.run(meta.search_async(q, limit=limit))
     except Exception as exc:
         raise RuntimeError(f"La recherche Spotify via SpotiFLAC a échoué : {exc}") from exc
 
@@ -680,6 +930,72 @@ def _search_spotify(q: str, limit: int = 12) -> list:
     return [item for item in results if item["url"]]
 
 
+def _search_deemix(q: str, limit: int = 8) -> list:
+    """Recherche par mot-clé directement sur l'API publique Deezer (aucun ARL
+    requis) : mêmes 4 types que la recherche SpotiFLAC, fusionnés en une liste."""
+    dz = Deezer()
+    results = []
+
+    def _add(items, mapper):
+        for item in items:
+            try:
+                results.append(mapper(item))
+            except Exception:
+                continue
+
+    try:
+        data = dz.api.search_track(q, limit=limit).get("data") or []
+        _add(data, lambda t: {
+            "type": "track",
+            "title": t.get("title", ""),
+            "artist": (t.get("artist") or {}).get("name", ""),
+            "album": (t.get("album") or {}).get("title", ""),
+            "thumbnail": (t.get("album") or {}).get("cover_xl") or (t.get("album") or {}).get("cover_big", ""),
+            "duration": fmt_duration(t.get("duration")),
+            "url": t.get("link", ""),
+            "preview": t.get("preview", ""),
+        })
+    except Exception:
+        pass
+    try:
+        data = dz.api.search_album(q, limit=limit).get("data") or []
+        _add(data, lambda a: {
+            "type": "album",
+            "title": a.get("title", ""),
+            "artist": (a.get("artist") or {}).get("name", ""),
+            "album": "",
+            "thumbnail": a.get("cover_xl") or a.get("cover_big", ""),
+            "url": a.get("link", ""),
+        })
+    except Exception:
+        pass
+    try:
+        data = dz.api.search_artist(q, limit=limit).get("data") or []
+        _add(data, lambda ar: {
+            "type": "artist",
+            "title": ar.get("name", ""),
+            "artist": "",
+            "album": "",
+            "thumbnail": ar.get("picture_xl") or ar.get("picture_big", ""),
+            "url": ar.get("link", ""),
+        })
+    except Exception:
+        pass
+    try:
+        data = dz.api.search_playlist(q, limit=limit).get("data") or []
+        _add(data, lambda p: {
+            "type": "playlist",
+            "title": p.get("title", ""),
+            "artist": (p.get("user") or {}).get("name", ""),
+            "album": "",
+            "thumbnail": p.get("picture_xl") or p.get("picture_big", ""),
+            "url": p.get("link", ""),
+        })
+    except Exception:
+        pass
+    return [item for item in results if item["url"]]
+
+
 @app.route("/api/search")
 def search():
     q = request.args.get("q", "").strip()
@@ -694,6 +1010,8 @@ def search():
             results = _search_cached(("sc", q), lambda: _search_soundcloud(q))
         elif kind == "spotify":
             results = _search_cached(("sp", q), lambda: _search_spotify(q))
+        elif kind == "deemix":
+            results = _search_cached(("dz", q), lambda: _search_deemix(q))
         else:
             return jsonify({"error": "Type de recherche inconnu"}), 400
         return jsonify({"results": results})
@@ -801,13 +1119,20 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
             settings = spoti_data.get("settings") or {}
             source_quality = settings.get("source_quality", "LOSSLESS")
             transcode_to = settings.get("transcode_to", "flac")
-            if source_quality not in {"LOSSLESS", "HI_RES_LOSSLESS", "HI_RES", "DOLBY_ATMOS", "HIGH", "LOW"}:
+            if source_quality not in {"LOSSLESS", "HI_RES_LOSSLESS", "HI_RES", "HIGH", "LOW"}:
                 raise ValueError("Qualité SpotiFLAC invalide")
             if transcode_to not in {"flac", "alac", "wavpack", "tta", "wav", "aiff", "mp3", None}:
                 raise ValueError("Format de sortie SpotiFLAC invalide")
             bitrate = settings.get("transcode_bitrate", "320k")
             if bitrate not in {"128k", "192k", "256k", "320k"}:
                 raise ValueError("Débit MP3 invalide")
+            requested_services = settings.get("services")
+            if requested_services:
+                services = [s for s in requested_services if s in SPOTIFLAC_ALLOWED_SERVICES]
+                if not services:
+                    raise ValueError("Aucune source SpotiFLAC valide sélectionnée")
+            else:
+                services = SPOTIFLAC_SERVICES
 
             state["current_title"] = "Recherche d'une source SpotiFLAC..."
 
@@ -842,7 +1167,7 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
             async def _run_spotiflac():
                 async with AsyncSpotiFLAC(
                     output_dir=str(out_dir),
-                    services=SPOTIFLAC_SERVICES,
+                    services=services,
                     registries=[SPOTIFLAC_REGISTRY],
                     quality=source_quality,
                     use_track_numbers=settings.get("use_track_numbers", True),
@@ -1137,6 +1462,283 @@ def download_thumbnail():
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Deemix (téléchargement Deezer via ARL) ────────────────────────────────────
+
+DEEMIX_QUALITY_MAP = {
+    "FLAC": TrackFormats.FLAC,
+    "MP3_320": TrackFormats.MP3_320,
+    "MP3_128": TrackFormats.MP3_128,
+}
+DEEMIX_CONFIG_DIR = DATA_DIR / "deemix"
+DEEMIX_SETTINGS = load_deemix_settings(str(DEEMIX_CONFIG_DIR / "config"))
+
+_deemix_spotify_plugin = None
+_deemix_spotify_plugin_lock = threading.Lock()
+_deemix_arl_rotation_index = 0
+_deemix_arl_rotation_lock = threading.Lock()
+
+
+def _get_deemix_plugins() -> dict:
+    """Plugin Spotify de deemix (résolution Spotify → Deezer par ISRC/UPC).
+
+    Nécessite les identifiants d'appli Spotify (SPOTIFY_CLIENT_ID/SECRET,
+    déjà utilisés ailleurs dans l'app) ; sans eux, seuls les liens Deezer
+    directs fonctionnent sur la page Deemix.
+    """
+    global _deemix_spotify_plugin
+    client_id = os.environ.get("SPOTIFY_CLIENT_ID")
+    client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        return {}
+    with _deemix_spotify_plugin_lock:
+        if _deemix_spotify_plugin is None:
+            try:
+                from deemix.plugins.spotify import Spotify as DeemixSpotify
+                plugins_dir = DEEMIX_CONFIG_DIR / "plugins"
+                plugins_dir.mkdir(parents=True, exist_ok=True)
+                plugin = DeemixSpotify(configFolder=str(plugins_dir))
+                plugin.setup()
+                plugin.saveSettings({
+                    "clientId": client_id,
+                    "clientSecret": client_secret,
+                    "fallbackSearch": True,
+                })
+                _deemix_spotify_plugin = plugin if plugin.enabled else False
+            except Exception as exc:
+                print(f"[deemix] Plugin Spotify indisponible : {exc}")
+                _deemix_spotify_plugin = False
+    return {"spotify": _deemix_spotify_plugin} if _deemix_spotify_plugin else {}
+
+
+def _deemix_login():
+    """Se connecte avec le prochain ARL du pool (rotation), pour répartir la
+    charge/le rate-limit entre plusieurs comptes Deezer."""
+    global _deemix_arl_rotation_index
+    arls = _load_json(ARLS_FILE, [])
+    if not arls:
+        return None
+    with _deemix_arl_rotation_lock:
+        start = _deemix_arl_rotation_index % len(arls)
+        _deemix_arl_rotation_index = (start + 1) % len(arls)
+    order = arls[start:] + arls[:start]
+    for entry in order:
+        dz = Deezer()
+        try:
+            if dz.login_via_arl(entry["arl"]):
+                return dz
+        except Exception:
+            continue
+    return None
+
+
+def _parse_deezer_url(url: str) -> tuple[str, str] | None:
+    if "deezer.page.link" in url or "link.deezer.com" in url:
+        try:
+            resp = requests.head(url, allow_redirects=True, timeout=10)
+            url = resp.url
+        except Exception:
+            pass
+    m = re.search(r"deezer\.com/(?:[a-z]{2}/)?(track|album|playlist)/(\d+)", url)
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+def _resolve_deemix_link(url: str) -> dict:
+    """Prévisualisation d'un lien Spotify ou Deezer pour la page Deemix.
+
+    Ne fait que lire des métadonnées publiques (Deezer : api.deezer.com sans
+    connexion ; Spotify : la même page embed que /spotify) — aucun ARL requis
+    ici, seulement pour le téléchargement lui-même.
+    """
+    deezer_match = _parse_deezer_url(url)
+    if deezer_match:
+        kind, item_id = deezer_match
+        dz = Deezer()
+        try:
+            if kind == "track":
+                t = dz.api.get_track(item_id)
+                album = t.get("album") or {}
+                return {
+                    "type": "deemix", "kind": "track", "url": url,
+                    "title": t.get("title", ""),
+                    "artist": (t.get("artist") or {}).get("name", ""),
+                    "thumbnail": album.get("cover_xl") or album.get("cover_big", ""),
+                    "total_tracks": 1,
+                    "tracks": [{
+                        "title": t.get("title", ""),
+                        "artist": (t.get("artist") or {}).get("name", ""),
+                        "track_number": 1,
+                        "duration": fmt_duration(t.get("duration")),
+                        "duration_seconds": t.get("duration", 0),
+                        "preview": t.get("preview", ""),
+                    }],
+                }
+            if kind == "album":
+                a = dz.api.get_album(item_id)
+                tracks = (a.get("tracks") or {}).get("data", [])
+                return {
+                    "type": "deemix", "kind": "album", "url": url,
+                    "title": a.get("title", ""),
+                    "artist": (a.get("artist") or {}).get("name", ""),
+                    "thumbnail": a.get("cover_xl") or a.get("cover_big", ""),
+                    "total_tracks": a.get("nb_tracks", len(tracks)),
+                    "tracks": [{
+                        "title": tr.get("title", ""),
+                        "artist": (tr.get("artist") or {}).get("name", ""),
+                        "track_number": tr.get("track_position", idx + 1),
+                        "duration": fmt_duration(tr.get("duration")),
+                        "duration_seconds": tr.get("duration", 0),
+                        "preview": tr.get("preview", ""),
+                    } for idx, tr in enumerate(tracks)],
+                }
+            if kind == "playlist":
+                p = dz.api.get_playlist(item_id)
+                tracks = (p.get("tracks") or {}).get("data", [])
+                return {
+                    "type": "deemix", "kind": "playlist", "url": url,
+                    "title": p.get("title", ""),
+                    "artist": (p.get("creator") or {}).get("name", ""),
+                    "thumbnail": p.get("picture_xl") or p.get("picture_big", ""),
+                    "total_tracks": p.get("nb_tracks", len(tracks)),
+                    "tracks": [{
+                        "title": tr.get("title", ""),
+                        "artist": (tr.get("artist") or {}).get("name", ""),
+                        "track_number": idx + 1,
+                        "duration": fmt_duration(tr.get("duration")),
+                        "duration_seconds": tr.get("duration", 0),
+                        "preview": tr.get("preview", ""),
+                    } for idx, tr in enumerate(tracks)],
+                }
+        except Exception as exc:
+            raise RuntimeError(f"Impossible de récupérer ce lien Deezer : {exc}") from exc
+
+    sp_data = _parse_spotify_url(url)
+    if sp_data:
+        return {**sp_data, "type": "deemix"}
+
+    artist_data = _fetch_artist_discography(url)
+    if artist_data:
+        return {**artist_data, "type": "deemix"}
+
+    raise RuntimeError("Lien Spotify ou Deezer non reconnu")
+
+
+class _DeemixProgressListener:
+    """Pont entre les évènements de deemix.downloader.Downloader et l'état de
+    progression exposé par /api/progress/<id> (même format que SpotiFLAC)."""
+
+    def __init__(self, state: dict):
+        self.state = state
+
+    def send(self, key, value=None):
+        if key == "updateQueue" and isinstance(value, dict):
+            if value.get("downloaded") or value.get("failed"):
+                total = max(1, self.state.get("total", 1))
+                current = min(total, self.state.get("current", 0) + 1)
+                self.state["current"] = current
+                self.state["progress"] = current / total * 100
+            data = value.get("data") or {}
+            title, artist = data.get("title"), data.get("artist")
+            if title:
+                self.state["current_title"] = f"{artist} - {title}" if artist else title
+
+
+@app.route("/api/deemix/info")
+def deemix_info():
+    url = request.args.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "URL manquante"}), 400
+    try:
+        return jsonify(_resolve_deemix_link(url))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/deemix/download", methods=["POST"])
+def deemix_download():
+    data = request.get_json() or {}
+    url = (data.get("url") or "").strip()
+    quality = data.get("quality", "FLAC")
+    if not url:
+        return jsonify({"error": "URL manquante"}), 400
+    if quality not in DEEMIX_QUALITY_MAP:
+        return jsonify({"error": "Qualité Deemix invalide"}), 400
+    if not _load_json(ARLS_FILE, []):
+        return jsonify({"error": "Aucun ARL Deezer configuré. Contactez l'administrateur (/admin)."}), 400
+
+    download_id = uuid.uuid4().hex
+    downloads[download_id] = {
+        "progress": 0, "status": "starting", "current": 0, "total": 1,
+        "is_playlist": False, "error": None,
+    }
+    t = threading.Thread(target=_deemix_download_thread, args=(download_id, url, quality), daemon=True)
+    t.start()
+    return jsonify({"download_id": download_id})
+
+
+def _deemix_download_thread(download_id: str, url: str, quality: str):
+    state = downloads[download_id]
+    out_dir = DOWNLOAD_DIR / download_id
+    out_dir.mkdir(exist_ok=True)
+    try:
+        state["current_title"] = "Connexion à Deezer..."
+        dz = _deemix_login()
+        if dz is None:
+            raise RuntimeError("Aucun ARL Deezer valide n'est disponible. Contactez l'administrateur.")
+
+        bitrate = DEEMIX_QUALITY_MAP[quality]
+        plugins = _get_deemix_plugins()
+        if "spotify" in url.lower() and "spotify" not in plugins:
+            raise RuntimeError(
+                "Les liens Spotify nécessitent SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET côté "
+                "serveur pour Deemix. Utilisez un lien Deezer direct en attendant."
+            )
+
+        state["current_title"] = "Résolution du lien..."
+        try:
+            download_object = generateDownloadObject(dz, url, bitrate, plugins, listener=None)
+        except GenerationError as exc:
+            raise RuntimeError(f"Lien non reconnu ou indisponible sur Deezer : {exc}") from exc
+        if isinstance(download_object, list):
+            raise RuntimeError("Les liens artiste ne sont pas pris en charge par Deemix pour l'instant.")
+
+        total = getattr(download_object, "size", 1) or 1
+        state["total"] = total
+        state["is_playlist"] = total > 1
+        state["status"] = "downloading"
+
+        settings = deepcopy(DEEMIX_SETTINGS)
+        settings.update({
+            "downloadLocation": str(out_dir),
+            "maxBitrate": str(bitrate),
+            "createPlaylistFolder": False,
+            "createArtistFolder": False,
+            "createAlbumFolder": total > 1,
+            "createSingleFolder": False,
+            "fallbackBitrate": True,
+        })
+
+        Downloader(dz, download_object, settings, _DeemixProgressListener(state)).start()
+
+        errors = getattr(download_object, "errors", [])
+        files = [f for f in out_dir.rglob("*") if f.is_file() and f.suffix.lower() in {".flac", ".mp3"}]
+        if not files:
+            detail = errors[0]["message"] if errors else "Aucun fichier récupéré depuis Deezer"
+            raise RuntimeError(detail)
+
+        title = getattr(download_object, "title", "") or "Deemix"
+        artist = getattr(download_object, "artist", "") or ""
+        state["status"] = "done"
+        state["progress"] = 100
+        state["current"] = total
+        state["filepath"] = str(out_dir)
+        state["filename"] = _clean(f"{artist} - {title}".strip(" -")) or "deemix"
+    except Exception as e:
+        state["status"] = "error"
+        state["error"] = str(e)
 
 
 if __name__ == "__main__":

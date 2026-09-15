@@ -20,9 +20,37 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedFormat = 'flac';
   let selectedQuality = 'LOSSLESS';
   let selectedBitrate = '320k';
+  let selectedSources = Array.from(document.querySelectorAll('#spotify-source-tabs .fmt-tab')).map((tab) => tab.dataset.source);
   let polling = null;
   let latestSearchResults = [];
   let selectedSearchFilter = 'all';
+
+  const previewAudio = new Audio();
+  let previewButton = null;
+  function togglePreview(url, button) {
+    if (!url) return;
+    if (previewButton === button && !previewAudio.paused) {
+      previewAudio.pause();
+      return;
+    }
+    if (previewButton && previewButton !== button) {
+      previewButton.textContent = '▶';
+      previewButton.classList.remove('playing');
+    }
+    previewAudio.src = url;
+    previewAudio.currentTime = 0;
+    previewAudio.play().catch(() => {});
+    previewButton = button;
+    button.textContent = '❚❚';
+    button.classList.add('playing');
+  }
+  previewAudio.addEventListener('pause', () => {
+    if (previewButton) {
+      previewButton.textContent = '▶';
+      previewButton.classList.remove('playing');
+    }
+  });
+  previewAudio.addEventListener('ended', () => { previewButton = null; });
 
   analyseButton.addEventListener('click', analyseUrl);
   urlInput.addEventListener('keydown', (event) => {
@@ -47,6 +75,24 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('#spotify-quality-tabs .q-btn').forEach((tab) => tab.classList.remove('active'));
       button.classList.add('active');
       selectedQuality = button.dataset.quality;
+    });
+  });
+
+  const settingsToggle = document.getElementById('spotify-settings-toggle');
+  const settingsPanel = document.getElementById('spotify-settings-panel');
+  settingsToggle.addEventListener('click', () => {
+    const willOpen = settingsPanel.classList.contains('hidden');
+    settingsPanel.classList.toggle('hidden', !willOpen);
+    settingsToggle.setAttribute('aria-expanded', String(willOpen));
+  });
+
+  document.querySelectorAll('#spotify-source-tabs .fmt-tab').forEach((button) => {
+    button.addEventListener('click', () => {
+      const active = document.querySelectorAll('#spotify-source-tabs .fmt-tab.active');
+      if (active.length === 1 && button.classList.contains('active')) return;
+      button.classList.toggle('active');
+      button.setAttribute('aria-pressed', String(button.classList.contains('active')));
+      selectedSources = Array.from(document.querySelectorAll('#spotify-source-tabs .fmt-tab.active')).map((tab) => tab.dataset.source);
     });
   });
 
@@ -142,6 +188,21 @@ document.addEventListener('DOMContentLoaded', () => {
       if (track.album && data.kind === 'artist') text.append(Object.assign(document.createElement('em'), { textContent: ` · ${track.album}` }));
 
       row.append(box, knob, num, text);
+
+      if (track.preview) {
+        const previewBtn = document.createElement('button');
+        previewBtn.type = 'button';
+        previewBtn.className = 'preview-btn';
+        previewBtn.textContent = '▶';
+        previewBtn.setAttribute('aria-label', 'Écouter un extrait');
+        previewBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          togglePreview(track.preview, previewBtn);
+        });
+        row.appendChild(previewBtn);
+      }
+
       tracks.appendChild(row);
     });
 
@@ -334,6 +395,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function collectSettings() {
     const checked = (id) => document.getElementById(id).checked;
     return {
+      services: selectedSources,
       source_quality: selectedQuality,
       transcode_to: selectedFormat,
       transcode_bitrate: selectedBitrate,

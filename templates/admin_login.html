@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connexion admin — YTDown</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app" style="max-width:420px;">
+    <header>
+      <div class="header-top">
+        <h1 class="logo">Admin</h1>
+        <a class="fmt-tab" href="/">YTDown</a>
+      </div>
+      <p class="tagline">Connexion réservée aux comptes administrateur.</p>
+    </header>
+
+    <main>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+          <div class="error">{{ message }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      <section class="card">
+        <form class="card-body" method="post" action="/admin/login">
+          <div class="input-row"><input type="text" name="username" placeholder="Utilisateur" autocomplete="username" required></div>
+          <div class="input-row"><input type="password" name="password" placeholder="Mot de passe" autocomplete="current-password" required></div>
+          <button type="submit" class="dl-btn">Se connecter</button>
+        </form>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

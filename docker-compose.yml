@@ -9,6 +9,8 @@ services:
       - ./downloads:/app/downloads
       # Extensions, fournisseurs et configuration SpotiFLAC persistants
       - ./spotiflac:/root/.spotiflac
+      # Comptes admin, ARL Deezer et config Deemix persistants
+      - ./data:/app/data
     restart: always
     env_file:
       - .env

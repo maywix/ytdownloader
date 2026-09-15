@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deemix — YTDown</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="header-top">
+        <h1 class="logo">Deemix <span class="beta-badge">BÊTA</span></h1>
+        <a class="fmt-tab" href="/">YTDown</a>
+        <a class="fmt-tab" href="/spotify">SpotiFLAC</a>
+      </div>
+      <p class="tagline">Téléchargez de la musique en qualité CD (FLAC lossless) depuis Deezer, via un lien Deezer direct ou un lien Spotify. Nécessite qu'un administrateur ait configuré un ARL Deezer valide.</p>
+    </header>
+
+    <main>
+      <section>
+        <div class="input-row">
+          <input id="deemix-url" type="url" placeholder="https://www.deezer.com/... ou https://open.spotify.com/..." autocomplete="off" spellcheck="false">
+          <button id="deemix-analyse-btn">
+            <span id="deemix-analyse-label">Analyser</span>
+            <span id="deemix-analyse-spinner" class="spinner hidden"></span>
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <div class="input-row">
+          <input id="deemix-search" type="search" placeholder="Rechercher un titre ou un artiste" autocomplete="off">
+          <button id="deemix-search-btn">
+            <span id="deemix-search-label">Rechercher</span>
+            <span id="deemix-search-spinner" class="spinner hidden"></span>
+          </button>
+        </div>
+        <div class="fmt-tabs" id="deemix-search-filters">
+          <button type="button" class="fmt-tab active" data-filter="all">Tout</button>
+          <button type="button" class="fmt-tab" data-filter="track">Titres</button>
+          <button type="button" class="fmt-tab" data-filter="album">Albums</button>
+          <button type="button" class="fmt-tab" data-filter="artist">Artistes</button>
+          <button type="button" class="fmt-tab" data-filter="playlist">Playlists</button>
+        </div>
+        <p id="deemix-search-summary" class="meta-sub"></p>
+        <div id="deemix-results"></div>
+      </section>
+
+      <div id="deemix-error" class="error hidden"></div>
+
+      <section id="deemix-card" class="card hidden">
+        <div class="thumb-wrap">
+          <img id="deemix-cover" src="" alt="Pochette">
+          <span id="deemix-kind" class="badge badge-playlist">ALBUM</span>
+        </div>
+        <div class="card-body">
+          <div class="meta-top">
+            <h2 id="deemix-title"></h2>
+            <p id="deemix-artist" class="meta-sub"></p>
+          </div>
+          <div>
+            <p class="meta-sub">Qualité (Deezer, jusqu'à CD lossless)</p>
+            <div class="q-grid" id="deemix-quality-tabs">
+              <button type="button" class="q-btn active" data-quality="FLAC">FLAC (Lossless)</button>
+              <button type="button" class="q-btn" data-quality="MP3_320">MP3 320 kb/s</button>
+              <button type="button" class="q-btn" data-quality="MP3_128">MP3 128 kb/s</button>
+            </div>
+          </div>
+          <div>
+            <p class="meta-sub">Pistes (<span id="deemix-track-count">0</span>)</p>
+            <div id="deemix-tracks" class="track-list"></div>
+          </div>
+          <button id="deemix-download-btn" class="dl-btn">Télécharger</button>
+        </div>
+      </section>
+
+      <section id="deemix-progress" class="card hidden">
+        <div class="prog-head">
+          <span id="deemix-progress-label">Démarrage...</span>
+          <span id="deemix-progress-pct">0%</span>
+        </div>
+        <div class="prog-track"><div id="deemix-progress-fill" class="prog-fill"></div></div>
+        <div class="prog-meta">
+          <span id="deemix-progress-current"></span>
+        </div>
+      </section>
+
+      <section id="deemix-done" class="card done-card hidden">
+        <span class="done-check">✓</span>
+        <div class="done-info">
+          <strong>Terminé</strong>
+          <span id="deemix-done-name"></span>
+        </div>
+        <a id="deemix-save-link" href="#" class="save-btn">Télécharger</a>
+      </section>
+    </main>
+  </div>
+  <script src="/static/deemix.js?v=1"></script>
+</body>
+</html>

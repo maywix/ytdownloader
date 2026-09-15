@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panneau admin — YTDown</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="header-top">
+        <h1 class="logo">Admin</h1>
+        <a class="fmt-tab" href="/admin/logout">Déconnexion ({{ current_user }})</a>
+      </div>
+      <p class="tagline">Comptes YTDown et ARL Deezer utilisés par Deemix.</p>
+    </header>
+
+    <main>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+          <div class="{{ 'error' if category == 'error' else 'admin-success' }}">{{ message }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      <section class="card">
+        <div class="card-body">
+          <h2 class="admin-h2">Comptes</h2>
+          <div class="admin-list">
+            {% for u in users %}
+            <div class="admin-row">
+              <span>{{ u.username }}</span>
+              <span class="role-badge{{ ' role-admin' if u.is_admin else '' }}">{{ 'Admin' if u.is_admin else 'Membre' }}</span>
+              <form method="post" action="/admin/users/{{ u.username }}/delete" class="admin-row-action">
+                <button type="submit" class="mini-btn">Supprimer</button>
+              </form>
+            </div>
+            {% endfor %}
+          </div>
+          <form method="post" action="/admin/users" class="admin-form">
+            <div class="input-row"><input name="username" placeholder="Nouvel utilisateur" autocomplete="off" required></div>
+            <div class="input-row"><input type="password" name="password" placeholder="Mot de passe" autocomplete="new-password" required></div>
+            <label class="toggle"><input type="checkbox" name="is_admin"><span class="switch"></span><span class="toggle-text">Administrateur</span></label>
+            <button type="submit" class="dl-btn">Ajouter le compte</button>
+          </form>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-body">
+          <h2 class="admin-h2">ARL Deezer (Deemix)</h2>
+          <p class="meta-sub">Plusieurs ARL peuvent être ajoutés : Deemix les utilise à tour de rôle pour répartir la charge entre comptes et limiter le rate-limit Deezer.</p>
+          <div class="admin-list">
+            {% for a in arls %}
+            <div class="admin-row">
+              <span>{{ a.label }} — <code>{{ a.masked }}</code></span>
+              <span class="meta-sub">{{ a.account }}{% if a.lossless %} · Lossless{% endif %}</span>
+              <form method="post" action="/admin/arls/{{ a.id }}/delete" class="admin-row-action">
+                <button type="submit" class="mini-btn">Supprimer</button>
+              </form>
+            </div>
+            {% else %}
+            <p class="meta-sub">Aucun ARL configuré — les téléchargements Deemix sont désactivés.</p>
+            {% endfor %}
+          </div>
+          <form method="post" action="/admin/arls" class="admin-form">
+            <div class="input-row"><input name="label" placeholder="Nom (ex : Compte perso)" autocomplete="off"></div>
+            <div class="input-row"><input name="arl" placeholder="Valeur de l'ARL Deezer" autocomplete="off" required></div>
+            <button type="submit" class="dl-btn">Ajouter l'ARL</button>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

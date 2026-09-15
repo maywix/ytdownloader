@@ -76,6 +76,19 @@ header {
   font-size: 13px;
 }
 
+.beta-badge {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: #facc15;
+  color: #000;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 /* ─── Input row ───────────────────────────── */
 .input-row {
   display: flex;
@@ -288,6 +301,43 @@ header {
   opacity: 0.25;
   cursor: not-allowed;
   pointer-events: none;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-hint {
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+.gear-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 50%;
+  color: var(--muted2);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.gear-btn:hover, .gear-btn[aria-expanded="true"] {
+  color: var(--text);
+  border-color: var(--muted2);
 }
 
 /* ─── Quality grid ────────────────────────── */
@@ -633,4 +683,90 @@ footer {
   .toggle { min-height: 44px; }
   .toggle-text { font-size: 14px; }
   .track-text { white-space: normal; }
+}
+
+/* ─── Admin panel ──────────────────────────── */
+.admin-h2 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+
+.admin-success {
+  border: 1px solid #16351f;
+  background: #0a1a0d;
+  border-radius: 4px;
+  color: #4ade80;
+  font-size: 13px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+
+.admin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 16px;
+}
+
+.admin-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.admin-row code {
+  color: var(--muted2);
+  font-size: 12px;
+}
+
+.admin-row-action { margin-left: auto; }
+
+.admin-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.role-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  background: var(--card);
+  border: 1px solid var(--border2);
+  color: var(--muted2);
+}
+
+.role-badge.role-admin {
+  background: #fff;
+  border-color: #fff;
+  color: #000;
+}
+
+/* ─── Preview d'extrait audio ──────────────── */
+.preview-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 50%;
+  color: var(--muted2);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.preview-btn:hover { color: var(--text); border-color: var(--muted2); }
+
+.preview-btn.playing {
+  background: #fff;
+  border-color: #fff;
+  color: #000;
 }
