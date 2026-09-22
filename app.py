@@ -1727,6 +1727,27 @@ def serve_file(download_id):
     return send_file(filepath, as_attachment=True, download_name=d["filename"])
 
 
+def _serve_remote_image(image_url: str, title: str) -> Response:
+    """Récupère une image distante et la renvoie en pièce jointe (utilisé
+    aussi bien pour la miniature YouTube que pour les pochettes Spotify/Deezer,
+    qu'il faut proxifier depuis le serveur pour éviter tout souci de CORS/
+    hotlinking sur leurs CDN)."""
+    resp = requests.get(image_url, timeout=15)
+    resp.raise_for_status()
+
+    raw_ext = image_url.split("?")[0].rsplit(".", 1)[-1].lower()
+    ext = raw_ext if raw_ext in ("jpg", "jpeg", "png", "webp") else "jpg"
+    filename = f"{_clean(title, 60)}.{ext}"
+
+    return Response(
+        resp.content,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Type": resp.headers.get("Content-Type", "image/jpeg"),
+        },
+    )
+
+
 @app.route("/api/thumbnail", methods=["POST"])
 def download_thumbnail():
     data = request.get_json()
@@ -1743,20 +1764,25 @@ def download_thumbnail():
         if not thumb_url:
             return jsonify({"error": "Miniature introuvable"}), 404
 
-        resp = requests.get(thumb_url, timeout=15)
-        resp.raise_for_status()
+        return _serve_remote_image(thumb_url, title)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-        raw_ext = thumb_url.split("?")[0].rsplit(".", 1)[-1].lower()
-        ext = raw_ext if raw_ext in ("jpg", "jpeg", "png", "webp") else "jpg"
-        filename = f"{_clean(title, 60)}.{ext}"
 
-        return Response(
-            resp.content,
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Content-Type": resp.headers.get("Content-Type", "image/jpeg"),
-            },
-        )
+@app.route("/api/cover", methods=["POST"])
+def download_cover():
+    """Pochette Spotify/Deezer : contrairement à /api/thumbnail, l'URL de
+    l'image est déjà connue côté client (spotifyData.thumbnail /
+    deemixData.thumbnail, résolue par /api/music_info ou /api/deemix/info),
+    donc pas besoin de repasser par une extraction yt-dlp ici."""
+    data = request.get_json() or {}
+    image_url = (data.get("url") or "").strip()
+    title = data.get("title") or "cover"
+    if not image_url:
+        return jsonify({"error": "URL manquante"}), 400
+
+    try:
+        return _serve_remote_image(image_url, title)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

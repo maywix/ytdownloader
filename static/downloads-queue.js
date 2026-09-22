@@ -102,6 +102,36 @@
     }
   }
 
+  // Téléchargement générique d'une image proxifiée par le serveur (miniature
+  // YouTube via /api/thumbnail, pochette Spotify/Deezer via /api/cover) :
+  // même geste "POST → blob → <a download>" partout, pour que le bouton
+  // se comporte pareil sur les 3 pages.
+  async function downloadViaApi(endpoint, payload, fallbackFilename) {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      let message = 'Téléchargement impossible';
+      try { message = (await res.json()).error || message; } catch { /* réponse non-JSON */ }
+      throw new Error(message);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m = /filename="?([^";]+)"?/.exec(cd);
+    const filename = m ? m[1] : fallbackFilename;
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+  }
+
   function attach(entry, downloadId) {
     entry.downloadId = downloadId;
     entry.status = 'downloading';
@@ -518,7 +548,7 @@
     if (event.key === AUTO_DL_KEY) syncAutoDlCheckboxes();
   });
 
-  window.DLQueue = { add, attach, fail, cancel, cancelById, remove, clearFinished, quickDownloadYoutube, quickDownloadSpotify, quickDownloadDeemix };
+  window.DLQueue = { add, attach, fail, cancel, cancelById, remove, clearFinished, downloadViaApi, quickDownloadYoutube, quickDownloadSpotify, quickDownloadDeemix };
 
   document.addEventListener('DOMContentLoaded', () => {
     ensureUI();

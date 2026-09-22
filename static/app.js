@@ -344,6 +344,18 @@ document.addEventListener('DOMContentLoaded', () => {
   dlBtn.addEventListener('click', () => startDownload('single', curFmt, curQ));
   pDlBtn.addEventListener('click', () => startDownload('playlist', pCurFmt, pCurQ));
 
+  thumbBtn.addEventListener('click', async () => {
+    if (!currentUrl) return;
+    thumbBtn.disabled = true;
+    try {
+      await window.DLQueue.downloadViaApi('/api/thumbnail', { url: currentUrl }, 'thumbnail.jpg');
+    } catch (e) {
+      showError(e.message || 'Miniature introuvable');
+    } finally {
+      thumbBtn.disabled = false;
+    }
+  });
+
   async function startDownload(mode, fmt, quality) {
     const btn = mode === 'playlist' ? pDlBtn : dlBtn;
     btn.disabled = true;

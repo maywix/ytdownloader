@@ -269,6 +269,9 @@ header {
 .thumb-btn:hover    { background: rgba(0,0,0,0.95); }
 .thumb-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* Sur SpotiFLAC/Deemix, le badge ALBUM/TITRE occupe déjà le coin haut-droit */
+.thumb-btn-left { right: auto; left: 8px; }
+
 /* Card body */
 .card-body {
   padding: 26px;

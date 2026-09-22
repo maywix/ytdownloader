@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const analyseSpinner = document.getElementById('deemix-analyse-spinner');
   const errorBox = document.getElementById('deemix-error');
   const card = document.getElementById('deemix-card');
+  const coverBtn = document.getElementById('deemix-cover-btn');
   const progressCard = document.getElementById('deemix-progress');
   const progressCancelBtn = document.getElementById('deemix-progress-cancel');
   const doneCard = document.getElementById('deemix-done');
@@ -101,6 +102,18 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   downloadButton.addEventListener('click', startDownload);
+
+  coverBtn.addEventListener('click', async () => {
+    if (!deemixData || !deemixData.thumbnail) return;
+    coverBtn.disabled = true;
+    try {
+      await window.DLQueue.downloadViaApi('/api/cover', { url: deemixData.thumbnail, title: deemixData.title }, 'cover.jpg');
+    } catch (e) {
+      showError(e.message || 'Pochette introuvable');
+    } finally {
+      coverBtn.disabled = false;
+    }
+  });
 
   async function analyseUrl(fromSearch) {
     const url = urlInput.value.trim();

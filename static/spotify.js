@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const analyseSpinner = document.getElementById('spotify-analyse-spinner');
   const errorBox = document.getElementById('spotify-error');
   const card = document.getElementById('spotify-card');
+  const coverBtn = document.getElementById('spotify-cover-btn');
   const progressCard = document.getElementById('spotify-progress');
   const progressCancelBtn = document.getElementById('spotify-progress-cancel');
   const doneCard = document.getElementById('spotify-done');
@@ -162,6 +163,18 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   downloadButton.addEventListener('click', startDownload);
+
+  coverBtn.addEventListener('click', async () => {
+    if (!spotifyData || !spotifyData.thumbnail) return;
+    coverBtn.disabled = true;
+    try {
+      await window.DLQueue.downloadViaApi('/api/cover', { url: spotifyData.thumbnail, title: spotifyData.title }, 'cover.jpg');
+    } catch (e) {
+      showError(e.message || 'Pochette introuvable');
+    } finally {
+      coverBtn.disabled = false;
+    }
+  });
 
   document.getElementById('spotify-check-all').addEventListener('click', () => {
     tracks.querySelectorAll('.track-check').forEach((box) => { box.checked = true; });
