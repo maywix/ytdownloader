@@ -34,8 +34,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const videoCard = document.getElementById('video-card');
   const playlistCard = document.getElementById('playlist-card');
   const progressCard = document.getElementById('progress-card');
+  const progCancelBtn = document.getElementById('prog-cancel-btn');
   const doneCard = document.getElementById('done-card');
   const errorMsg = document.getElementById('error-msg');
+  const backBtn = document.getElementById('back-btn');
 
   // Video Card Elements
   const videoThumb = document.getElementById('video-thumb');
@@ -54,9 +56,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const pDlBtn = document.getElementById('p-dl-btn');
 
   let currentUrl = '';
-  let curFmt = 'mp4';
+  let curFmt = 'best';
   let curQ = '1080';
   let pCurFmt = 'mp4';
+  let pCurQ = '1080';
+  let channelScope = 'all';
+  let datePreset = 'now-1year';
 
   const STATE_KEY = 'ytdown_state';
   function saveSearchState(patch) {
@@ -64,6 +69,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const DOWNLOAD_KEY = 'ytdown_download';
+  let activeDownloadId = null;
+  let activeStartBtn = null;
 
   fetchBtn.addEventListener('click', runFetch);
   urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') runFetch(); });
@@ -104,8 +111,10 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.href = `/spotify?url=${encodeURIComponent(raw)}`;
       } else if (data.type === 'playlist') {
         renderPlaylistCard(data);
+        if (autoDlChk.checked) pDlBtn.click();
       } else {
         renderVideoCard(data);
+        if (autoDlChk.checked) dlBtn.click();
       }
     } catch {
       showError('Serveur inaccessible');
@@ -160,7 +169,57 @@ document.addEventListener('DOMContentLoaded', () => {
     pTitle.textContent = data.title || '';
     pChannel.textContent = data.channel || '';
     pCount.textContent = `${data.count} éléments`;
+    document.getElementById('channel-scope-section').classList.toggle('hidden', !data.is_channel);
+    resetChannelScopeUI();
     show(playlistCard);
+  }
+
+  // ── Choix de format/qualité/portée pour une playlist ou une chaîne ──
+  document.querySelectorAll('#p-fmt-tabs .fmt-tab').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('#p-fmt-tabs .fmt-tab').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      pCurFmt = chip.dataset.fmt;
+      document.getElementById('p-quality-section').style.display = (pCurFmt === 'mp4') ? '' : 'none';
+    });
+  });
+
+  document.querySelectorAll('#p-q-grid .q-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#p-q-grid .q-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      pCurQ = btn.dataset.q;
+    });
+  });
+
+  const scopeRangeFields = document.getElementById('scope-range-fields');
+  const scopeDateFields = document.getElementById('scope-date-fields');
+  const dateCustomInput = document.getElementById('date-custom');
+
+  document.querySelectorAll('#scope-tabs .fmt-tab').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('#scope-tabs .fmt-tab').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      channelScope = chip.dataset.scope;
+      scopeRangeFields.classList.toggle('hidden', channelScope !== 'range');
+      scopeDateFields.classList.toggle('hidden', channelScope !== 'date');
+    });
+  });
+
+  document.querySelectorAll('#date-preset-grid .q-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#date-preset-grid .q-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      datePreset = btn.dataset.preset;
+      dateCustomInput.classList.toggle('hidden', datePreset !== 'custom');
+    });
+  });
+
+  function resetChannelScopeUI() {
+    channelScope = 'all';
+    document.querySelectorAll('#scope-tabs .fmt-tab').forEach(c => c.classList.toggle('active', c.dataset.scope === 'all'));
+    hide(scopeRangeFields);
+    hide(scopeDateFields);
   }
 
   // ── Format Selection Chips ──
@@ -248,6 +307,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>';
+
   function renderGrid(container, results) {
     container.innerHTML = '';
     (results || []).forEach(item => {
@@ -257,6 +318,7 @@ document.addEventListener('DOMContentLoaded', () => {
       card.innerHTML = `
         <div class="thumb-wrap" style="aspect-ratio: 16/9; margin-bottom: 8px;">
           <img src="${item.thumbnail || ''}" style="width:100%; height:100%; object-fit:cover;">
+          <button type="button" class="quick-dl-btn" title="Télécharger (qualité optimale)">${ICON_DOWNLOAD}</button>
         </div>
         <h4 style="font-size: 13px; font-weight: 600; line-height: 1.3; height: 2.6em; overflow: hidden; margin-bottom: 4px;">${item.title}</h4>
         <p style="font-size: 11px; color: var(--muted);">${item.artist || item.channel || ''}</p>
@@ -266,13 +328,21 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('tab-url-btn').click();
         runFetch();
       });
+      card.querySelector('.quick-dl-btn').addEventListener('click', (event) => {
+        event.stopPropagation();
+        const btn = event.currentTarget;
+        btn.disabled = true;
+        window.DLQueue.quickDownloadYoutube(item.url, {
+          title: item.title, subtitle: item.artist || item.channel || '', thumbnail: item.thumbnail,
+        }).finally(() => { btn.disabled = false; });
+      });
       container.appendChild(card);
     });
   }
 
   // ── Downloads & Polling ──
   dlBtn.addEventListener('click', () => startDownload('single', curFmt, curQ));
-  pDlBtn.addEventListener('click', () => startDownload('playlist', pCurFmt, '1080'));
+  pDlBtn.addEventListener('click', () => startDownload('playlist', pCurFmt, pCurQ));
 
   async function startDownload(mode, fmt, quality) {
     const btn = mode === 'playlist' ? pDlBtn : dlBtn;
@@ -281,22 +351,49 @@ document.addEventListener('DOMContentLoaded', () => {
     resetProgress();
     show(progressCard);
 
+    const queueEntry = window.DLQueue.add({
+      service: 'ytdown', autoSave: autoDlChk.checked,
+      title: mode === 'playlist' ? pTitle.textContent : videoTitle.textContent,
+      subtitle: mode === 'playlist' ? pChannel.textContent : videoChannel.textContent,
+      thumbnail: mode === 'playlist' ? pThumb.src : videoThumb.src,
+    });
+
+    const body = { url: currentUrl, format: fmt, quality, mode };
+    if (mode === 'playlist') {
+      body.channel_scope = channelScope;
+      if (channelScope === 'range') {
+        const start = parseInt(document.getElementById('range-start').value, 10) || 1;
+        const end = parseInt(document.getElementById('range-end').value, 10) || start;
+        body.range_start = start;
+        body.range_end = end;
+      } else if (channelScope === 'date') {
+        body.date_after = datePreset === 'custom'
+          ? (dateCustomInput.value || '').replace(/-/g, '')
+          : datePreset;
+      }
+    }
+
     try {
       const res = await fetch('/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: currentUrl, format: fmt, quality, mode }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
+        window.DLQueue.fail(queueEntry, data.error || 'Erreur');
         showError(data.error || 'Erreur');
         hide(progressCard);
         btn.disabled = false;
         return;
       }
+      activeDownloadId = data.download_id;
+      activeStartBtn = btn;
+      window.DLQueue.attach(queueEntry, data.download_id);
       YTPersist.save(DOWNLOAD_KEY, { downloadId: data.download_id, mode });
       pollProgress(data.download_id, btn);
     } catch {
+      window.DLQueue.fail(queueEntry, 'Serveur inaccessible');
       showError('Serveur inaccessible');
       hide(progressCard);
       btn.disabled = false;
@@ -304,6 +401,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let pollTimer = null;
+
+  function clearActiveDownload() {
+    activeDownloadId = null;
+    activeStartBtn = null;
+  }
 
   function pollProgress(id, btn) {
     clearInterval(pollTimer);
@@ -316,6 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
           showError(data.error);
           if (btn) btn.disabled = false;
           YTPersist.clear(DOWNLOAD_KEY);
+          clearActiveDownload();
           return;
         }
 
@@ -326,16 +429,36 @@ document.addEventListener('DOMContentLoaded', () => {
           if (btn) btn.disabled = false;
           showDone(id, data.filename, data.is_playlist);
           YTPersist.clear(DOWNLOAD_KEY);
+          clearActiveDownload();
         } else if (data.status === 'error') {
           stopPoll();
           if (btn) btn.disabled = false;
           hide(progressCard);
           showError(data.error || 'Erreur lors du traitement');
           YTPersist.clear(DOWNLOAD_KEY);
+          clearActiveDownload();
+        } else if (data.status === 'cancelled') {
+          stopPoll();
+          if (btn) btn.disabled = false;
+          hide(progressCard);
+          YTPersist.clear(DOWNLOAD_KEY);
+          clearActiveDownload();
         }
       } catch { /* retry */ }
     }, 600);
   }
+
+  progCancelBtn.addEventListener('click', async () => {
+    if (!activeDownloadId) return;
+    progCancelBtn.disabled = true;
+    await window.DLQueue.cancelById(activeDownloadId);
+    stopPoll();
+    hide(progressCard);
+    if (activeStartBtn) activeStartBtn.disabled = false;
+    YTPersist.clear(DOWNLOAD_KEY);
+    clearActiveDownload();
+    progCancelBtn.disabled = false;
+  });
 
   function updateProgressUI(data) {
     const pct = Math.min(100, Math.round(data.progress || 0));
@@ -364,9 +487,52 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveLink = document.getElementById('save-link');
 
     doneName.textContent = filename || '';
-    saveLink.href = `/api/file/${id}`;
     saveLink.textContent = isPlaylist ? 'Télécharger (.zip)' : 'Sauvegarder';
+    saveLink.classList.remove('loading');
+
+    // Le zip est assemblé côté serveur avant le premier octet de réponse :
+    // une navigation <a href> classique laisse la page muette pendant ce
+    // temps. On passe par fetch()+blob pour afficher un spinner pendant
+    // l'attente. Pour un fichier unique déjà sur disque (send_file, pas
+    // d'attente notable), on garde la navigation native (streaming, pas de
+    // blob géant en mémoire).
+    if (isPlaylist) {
+      saveLink.removeAttribute('href');
+      saveLink.onclick = (e) => { e.preventDefault(); downloadZipWithSpinner(saveLink, id, filename); };
+    } else {
+      saveLink.href = `/api/file/${id}`;
+      saveLink.onclick = null;
+    }
     show(doneCard);
+  }
+
+  async function downloadZipWithSpinner(link, id, filename) {
+    if (link.classList.contains('loading')) return;
+    const originalLabel = link.textContent;
+    link.classList.add('loading');
+    link.innerHTML = '<span class="spinner"></span> Préparation du zip...';
+    try {
+      const res = await fetch(`/api/file/${id}`);
+      if (!res.ok) throw new Error('Échec de la récupération du fichier');
+      const blob = await res.blob();
+      const cd = res.headers.get('Content-Disposition') || '';
+      const match = /filename="?([^";]+)"?/.exec(cd);
+      const saveName = match ? match[1] : (filename || 'download.zip');
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = saveName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+      link.textContent = originalLabel;
+    } catch {
+      showError('Impossible de récupérer le fichier');
+      link.textContent = originalLabel;
+    } finally {
+      link.classList.remove('loading');
+    }
   }
 
   // ── Helpers ──
@@ -383,7 +549,25 @@ document.addEventListener('DOMContentLoaded', () => {
   function showError(msg) { errorMsg.textContent = msg; show(errorMsg); }
   function show(el) { if (el) el.classList.remove('hidden'); }
   function hide(el) { if (el) el.classList.add('hidden'); }
-  function hideAllCards() { [videoCard, playlistCard, progressCard, doneCard, errorMsg, urlSearchResults].forEach(hide); }
+  function hideAllCards() { [videoCard, playlistCard, progressCard, doneCard, errorMsg, urlSearchResults, backBtn].forEach(hide); }
+
+  // ── Bouton retour : visible dès qu'une carte résultat/progression/terminé
+  // est affichée, ramène à l'état de recherche initial sans recharger la
+  // page. Le téléchargement en cours continue côté serveur (resumable via
+  // YTPersist au prochain chargement) — "retour" arrête juste le suivi UI.
+  document.querySelectorAll('#video-card, #playlist-card, #progress-card, #done-card').forEach((card) => {
+    const observer = new MutationObserver(() => {
+      const anyVisible = [videoCard, playlistCard, progressCard, doneCard].some((c) => !c.classList.contains('hidden'));
+      backBtn.classList.toggle('hidden', !anyVisible);
+    });
+    observer.observe(card, { attributes: true, attributeFilter: ['class'] });
+  });
+  backBtn.addEventListener('click', () => {
+    stopPoll();
+    hideAllCards();
+    urlInput.value = '';
+    urlInput.focus();
+  });
 
   function setLoading(on) {
     fetchBtn.disabled = on;
@@ -434,7 +618,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await fetch(`/api/progress/${state.downloadId}`);
       const data = await res.json();
-      if (data.error || data.status === 'done' || data.status === 'error') {
+      if (data.error || data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
         YTPersist.clear(DOWNLOAD_KEY);
         return;
       }
@@ -444,6 +628,8 @@ document.addEventListener('DOMContentLoaded', () => {
       updateProgressUI(data);
       show(progressCard);
       btn.disabled = true;
+      activeDownloadId = state.downloadId;
+      activeStartBtn = btn;
       pollProgress(state.downloadId, btn);
     } catch {
       /* pas grave : au pire on rate la reprise, le téléchargement continue quand même côté serveur */

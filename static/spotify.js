@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const errorBox = document.getElementById('spotify-error');
   const card = document.getElementById('spotify-card');
   const progressCard = document.getElementById('spotify-progress');
+  const progressCancelBtn = document.getElementById('spotify-progress-cancel');
   const doneCard = document.getElementById('spotify-done');
   const downloadButton = document.getElementById('spotify-download-btn');
   const tracks = document.getElementById('spotify-tracks');
@@ -15,6 +16,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchSpinner = document.getElementById('spotify-search-spinner');
   const searchResults = document.getElementById('spotify-results');
   const searchSummary = document.getElementById('spotify-search-summary');
+  const autoDlChk = document.getElementById('spotify-auto-dl');
+  const backBtn = document.getElementById('spotify-back-btn');
 
   let spotifyData = null;
   let selectedFormat = 'flac';
@@ -31,6 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const DOWNLOAD_KEY = 'spotiflac_download';
+  let activeDownloadId = null;
 
   const previewAudio = new Audio();
   let previewButton = null;
@@ -77,20 +81,52 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  const atmosHint = document.getElementById('spotify-atmos-hint');
+  const formatSection = document.getElementById('spotify-format-tabs').parentElement;
+  const ATMOS_SOURCES = new Set(['ext:tidal-web', 'ext:amazon']);
+  let sourcesBeforeAtmos = null;
+
+  function applyAtmosSourceLock(isAtmos) {
+    const sourceButtons = document.querySelectorAll('#spotify-source-tabs .fmt-tab');
+    if (isAtmos) {
+      // Dolby Atmos n'existe que sur Tidal et Amazon Music (comme l'appli
+      // officielle SpotiFLAC) : Qobuz/Deezer retombent en Hi-Res Max côté
+      // lib, donc les laisser cochés faisait "réussir" le téléchargement
+      // via un fallback silencieux en simple stéréo — d'où le "ça marche
+      // mais c'est du stéréo basique" signalé. On les verrouille pour de
+      // vrai plutôt que de compter sur un repli silencieux.
+      if (!sourcesBeforeAtmos) sourcesBeforeAtmos = Array.from(sourceButtons).map((b) => b.classList.contains('active'));
+      sourceButtons.forEach((button) => {
+        const ok = ATMOS_SOURCES.has(button.dataset.source);
+        button.classList.toggle('active', ok);
+        button.classList.toggle('unavailable', !ok);
+        button.setAttribute('aria-pressed', String(ok));
+      });
+    } else if (sourcesBeforeAtmos) {
+      sourceButtons.forEach((button, i) => {
+        button.classList.remove('unavailable');
+        button.classList.toggle('active', sourcesBeforeAtmos[i]);
+        button.setAttribute('aria-pressed', String(sourcesBeforeAtmos[i]));
+      });
+      sourcesBeforeAtmos = null;
+    }
+    selectedSources = Array.from(document.querySelectorAll('#spotify-source-tabs .fmt-tab.active')).map((tab) => tab.dataset.source);
+  }
+
   document.querySelectorAll('#spotify-quality-tabs .q-btn').forEach((button) => {
     button.addEventListener('click', () => {
       document.querySelectorAll('#spotify-quality-tabs .q-btn').forEach((tab) => tab.classList.remove('active'));
       button.classList.add('active');
       selectedQuality = button.dataset.quality;
+      const isAtmos = selectedQuality === 'DOLBY_ATMOS';
+      atmosHint.classList.toggle('hidden', !isAtmos);
+      // Dolby Atmos est un flux objet (Dolby Digital Plus JOC), pas du PCM :
+      // le transcoder en FLAC/MP3 le réduirait en stéréo plat, donc on
+      // masque le choix de format et on garde le flux original tel quel.
+      formatSection.classList.toggle('hidden', isAtmos);
+      document.getElementById('spotify-mp3-bitrate').classList.toggle('hidden', isAtmos || selectedFormat !== 'mp3');
+      applyAtmosSourceLock(isAtmos);
     });
-  });
-
-  const settingsToggle = document.getElementById('spotify-settings-toggle');
-  const settingsPanel = document.getElementById('spotify-settings-panel');
-  settingsToggle.addEventListener('click', () => {
-    const willOpen = settingsPanel.classList.contains('hidden');
-    settingsPanel.classList.toggle('hidden', !willOpen);
-    settingsToggle.setAttribute('aria-expanded', String(willOpen));
   });
 
   document.querySelectorAll('#spotify-source-tabs .fmt-tab').forEach((button) => {
@@ -136,7 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSelection();
   });
 
-  async function analyseUrl() {
+  async function analyseUrl(fromSearch) {
     const url = urlInput.value.trim();
     if (!url) return;
 
@@ -153,6 +189,12 @@ document.addEventListener('DOMContentLoaded', () => {
       spotifyData = data;
       renderMusic(data);
       show(card);
+      // Un lien collé + Analyser est une intention explicite de télécharger ce
+      // titre précis ; un clic sur un résultat de recherche est exploratoire
+      // (on veut d'abord voir les pistes/réglages) — l'auto-download ne se
+      // déclenche donc que dans le premier cas (bug signalé : ça sautait
+      // direct au téléchargement dès un clic sur un résultat).
+      if (!fromSearch && autoDlChk.checked) downloadButton.click();
     } catch (error) {
       showError(error.message || 'Serveur inaccessible.');
     } finally {
@@ -288,6 +330,20 @@ document.addEventListener('DOMContentLoaded', () => {
       image.src = item.thumbnail || '';
       image.alt = item.title ? `Pochette : ${item.title}` : 'Pochette Spotify';
       cover.appendChild(image);
+      const quickDlBtn = document.createElement('button');
+      quickDlBtn.type = 'button';
+      quickDlBtn.className = 'quick-dl-btn';
+      quickDlBtn.title = 'Télécharger (Lossless FLAC, toutes sources)';
+      quickDlBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>';
+      quickDlBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        quickDlBtn.disabled = true;
+        window.DLQueue.quickDownloadSpotify(item.url, {
+          title: item.title, subtitle: item.artist || '', thumbnail: item.thumbnail,
+        }).finally(() => { quickDlBtn.disabled = false; });
+      });
+      cover.appendChild(quickDlBtn);
       const title = document.createElement('h3');
       title.textContent = item.title || 'Sans titre';
       const meta = document.createElement('p');
@@ -301,7 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // d'abord le lien pour garder les vraies pistes album/playlist.
         urlInput.value = item.url || '';
         hide(searchResults);
-        analyseUrl();
+        analyseUrl(true);
       };
       result.addEventListener('click', selectResult);
       result.addEventListener('keydown', (event) => {
@@ -316,6 +372,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function startDownload() {
     if (!spotifyData) return;
+    previewAudio.pause();
     downloadButton.disabled = true;
     hide(errorBox);
     hide(card);
@@ -326,6 +383,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const total = (spotifyData.tracks || []).length;
     const selected = selectedIndices();
     const payloadTracks = total > 1 && selected.length < total ? selected : null;
+
+    const queueEntry = window.DLQueue.add({
+      service: 'spotiflac', autoSave: autoDlChk.checked,
+      title: spotifyData.title, subtitle: spotifyData.artist || '', thumbnail: spotifyData.thumbnail,
+    });
 
     try {
       const response = await fetch('/api/download', {
@@ -344,9 +406,12 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.error || 'Le téléchargement n’a pas pu démarrer.');
+      activeDownloadId = data.download_id;
+      window.DLQueue.attach(queueEntry, data.download_id);
       YTPersist.save(DOWNLOAD_KEY, { downloadId: data.download_id });
       pollProgress(data.download_id);
     } catch (error) {
+      window.DLQueue.fail(queueEntry, error.message || 'Serveur inaccessible.');
       hide(progressCard);
       downloadButton.disabled = false;
       showError(error.message || 'Serveur inaccessible.');
@@ -365,26 +430,53 @@ document.addEventListener('DOMContentLoaded', () => {
           clearInterval(polling);
           downloadButton.disabled = false;
           hide(progressCard);
-          document.getElementById('spotify-done-name').textContent = data.filename || '';
+          activeDownloadId = null;
+          const doneCheck = doneCard.querySelector('.done-check');
+          const doneTitle = doneCard.querySelector('.done-info strong');
+          doneCard.classList.toggle('quality-warning', !!data.quality_mismatch);
+          doneCheck.textContent = data.quality_mismatch ? '⚠' : '✓';
+          doneTitle.textContent = data.quality_mismatch ? 'Qualité inférieure' : 'Terminé';
+          document.getElementById('spotify-done-name').textContent = data.quality_mismatch || data.filename || '';
           document.getElementById('spotify-save-link').href = `/api/file/${downloadId}`;
+          document.getElementById('spotify-save-link').textContent = data.quality_mismatch ? 'Télécharger quand même' : 'Télécharger';
           show(doneCard);
           YTPersist.clear(DOWNLOAD_KEY);
         } else if (data.status === 'error') {
           clearInterval(polling);
           downloadButton.disabled = false;
           hide(progressCard);
+          activeDownloadId = null;
           showError(data.error || 'Erreur pendant le téléchargement.');
+          YTPersist.clear(DOWNLOAD_KEY);
+        } else if (data.status === 'cancelled') {
+          clearInterval(polling);
+          downloadButton.disabled = false;
+          hide(progressCard);
+          activeDownloadId = null;
           YTPersist.clear(DOWNLOAD_KEY);
         }
       } catch (error) {
         clearInterval(polling);
         downloadButton.disabled = false;
         hide(progressCard);
+        activeDownloadId = null;
         showError(error.message || 'Serveur inaccessible.');
         YTPersist.clear(DOWNLOAD_KEY);
       }
     }, 700);
   }
+
+  progressCancelBtn.addEventListener('click', async () => {
+    if (!activeDownloadId) return;
+    progressCancelBtn.disabled = true;
+    await window.DLQueue.cancelById(activeDownloadId);
+    clearInterval(polling);
+    hide(progressCard);
+    downloadButton.disabled = false;
+    YTPersist.clear(DOWNLOAD_KEY);
+    activeDownloadId = null;
+    progressCancelBtn.disabled = false;
+  });
 
   function updateProgress(data) {
     const progress = Math.min(100, Math.round(data.progress || 0));
@@ -410,7 +502,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return {
       services: selectedSources,
       source_quality: selectedQuality,
-      transcode_to: selectedFormat,
+      transcode_to: selectedQuality === 'DOLBY_ATMOS' ? null : selectedFormat,
       transcode_bitrate: selectedBitrate,
       embed_lyrics: checked('setting-embed-lyrics'),
       save_lrc: checked('setting-save-lrc'),
@@ -424,6 +516,12 @@ document.addEventListener('DOMContentLoaded', () => {
       create_playlist_subfolders: checked('setting-playlist-folders'),
       first_artist_only: checked('setting-first-artist'),
       include_featuring: checked('setting-featuring'),
+      // allow_fallback gère AUSSI le changement de fournisseur (Tidal →
+      // Amazon) en plus du repli de qualité : le désactiver pour l'Atmos
+      // empêchait d'essayer Amazon quand Tidal échoue (régression). Comme
+      // "services" est déjà restreint à Tidal+Amazon pour l'Atmos (voir
+      // applyAtmosSourceLock), le seul repli possible reste entre ces deux
+      // vraies sources Atmos — donc on respecte le réglage normal ici.
       allow_fallback: checked('setting-fallback'),
       transcode_keep_original: checked('setting-keep-original'),
       verify_hires: checked('setting-verify-hires'),
@@ -450,6 +548,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function show(element) { element.classList.remove('hidden'); }
   function hide(element) { element.classList.add('hidden'); }
+
+  // ── Bouton retour : visible dès qu'une carte résultat/progression/terminé
+  // est affichée, ramène à l'état de recherche initial sans recharger la
+  // page. Le téléchargement en cours continue côté serveur (resumable via
+  // YTPersist au prochain chargement) — "retour" arrête juste le suivi UI.
+  [card, progressCard, doneCard].forEach((el) => {
+    const observer = new MutationObserver(() => {
+      const anyVisible = [card, progressCard, doneCard].some((c) => !c.classList.contains('hidden'));
+      backBtn.classList.toggle('hidden', !anyVisible);
+    });
+    observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+  });
+  backBtn.addEventListener('click', () => {
+    clearInterval(polling);
+    hide(card);
+    hide(progressCard);
+    hide(doneCard);
+    hide(errorBox);
+    urlInput.value = '';
+    urlInput.focus();
+    if (latestSearchResults.length) show(searchResults);
+  });
 
   // ── Lien venu d'ailleurs (ex: redirigé depuis YTDown) ──
   const paramUrl = new URLSearchParams(window.location.search).get('url');
@@ -487,7 +607,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const response = await fetch(`/api/progress/${state.downloadId}`);
       const data = await response.json();
-      if (data.error || data.status === 'done' || data.status === 'error') {
+      if (data.error || data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
         YTPersist.clear(DOWNLOAD_KEY);
         return;
       }
@@ -496,6 +616,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updateProgress(data);
       show(progressCard);
       downloadButton.disabled = true;
+      activeDownloadId = state.downloadId;
       pollProgress(state.downloadId);
     } catch {
       /* pas grave : au pire on rate la reprise, le téléchargement continue quand même côté serveur */

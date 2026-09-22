@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>YTDown — Téléchargeur Vidéo & Musique FLAC</title>
+  <title>Eclypse Downloader</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -13,21 +13,23 @@
     <!-- ── En-tête ── -->
     <header>
       <div class="header-top">
-        <h1 class="logo">YTDown <span style="font-size:16px; font-weight:400; color:var(--muted2); font-style:italic;">SpotiFLAC</span></h1>
-        <div class="service-switch" id="service-switch">
-          <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
-            <span>YTDown</span>
-            <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
-          </button>
-          <div class="service-menu hidden" id="service-menu">
-            <a class="service-item current" href="/"><strong>YTDown</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
-            <a class="service-item" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
-            <a class="service-item" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
+        <h1 class="logo">Eclypse<span class="logo-mode">Downloader</span></h1>
+        <div class="header-actions">
+          <div class="service-switch" id="service-switch">
+            <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
+              <span>Eclypse</span>
+              <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+            </button>
+            <div class="service-menu hidden" id="service-menu">
+              <a class="service-item current" href="/"><strong>Eclypse</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
+              <a class="service-item" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
+              <a class="service-item" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
+            </div>
           </div>
-        </div>
-        <div class="version-badge hidden" id="version-badge">
-          <span class="version-dot"></span>
-          <span id="v-text">yt-dlp</span>
+          <div class="version-badge hidden" id="version-badge">
+            <span class="version-dot"></span>
+            <span id="v-text">yt-dlp</span>
+          </div>
         </div>
       </div>
       <p style="color: var(--muted2); font-size: 14px;">Téléchargez des vidéos 4K & des morceaux ou albums de musique en FLAC / MP3</p>
@@ -55,7 +57,7 @@
 
         <div class="auto-dl-row">
           <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-            <input type="checkbox" id="auto-dl-chk" checked>
+            <input type="checkbox" id="auto-dl-chk" data-auto-dl checked>
             <span>Télécharger automatiquement à la fin</span>
           </label>
         </div>
@@ -83,6 +85,11 @@
 
       <div id="error-msg" class="error hidden"></div>
 
+      <button type="button" id="back-btn" class="back-btn hidden">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>
+        Retour
+      </button>
+
       <!-- CARTE VIDÉO UNIQUE -->
       <div id="video-card" class="card hidden">
         <div class="thumb-wrap">
@@ -102,12 +109,12 @@
 
           <div class="label">Format</div>
           <div class="fmt-tabs" id="fmt-tabs">
-            <button class="fmt-tab active" data-fmt="mp4">MP4</button>
+            <button class="fmt-tab" data-fmt="mp4">MP4</button>
             <button class="fmt-tab" data-fmt="mp3">MP3</button>
             <button class="fmt-tab" data-fmt="flac">FLAC</button>
             <button class="fmt-tab" data-fmt="m4a">M4A</button>
             <button class="fmt-tab" data-fmt="mkv">MKV</button>
-            <button class="fmt-tab fmt-optimal" data-fmt="best">Optimal</button>
+            <button class="fmt-tab fmt-optimal active" data-fmt="best">Optimal</button>
           </div>
 
           <div id="quality-section">
@@ -143,6 +150,44 @@
             <button class="fmt-tab" data-fmt="flac">FLAC</button>
           </div>
 
+          <div id="p-quality-section">
+            <div class="label">Qualité maximale</div>
+            <div class="q-grid" id="p-q-grid">
+              <button class="q-btn active" data-q="1080">1080p</button>
+              <button class="q-btn" data-q="720">720p</button>
+              <button class="q-btn" data-q="480">480p</button>
+              <button class="q-btn" data-q="4k">4K</button>
+            </div>
+          </div>
+
+          <div id="channel-scope-section" class="hidden">
+            <div class="label">Vidéos à télécharger</div>
+            <div class="fmt-tabs" id="scope-tabs">
+              <button class="fmt-tab active" data-scope="all">Toutes</button>
+              <button class="fmt-tab" data-scope="range">Intervalle</button>
+              <button class="fmt-tab" data-scope="date">Depuis une date</button>
+            </div>
+
+            <div id="scope-range-fields" class="scope-fields hidden">
+              <div class="scope-row">
+                <label>De la vidéo n° <input type="number" id="range-start" min="1" value="1"></label>
+                <label>à la vidéo n° <input type="number" id="range-end" min="1" value="10"></label>
+              </div>
+            </div>
+
+            <div id="scope-date-fields" class="scope-fields hidden">
+              <div class="q-grid" id="date-preset-grid">
+                <button class="q-btn" data-preset="now-7days">7 jours</button>
+                <button class="q-btn" data-preset="now-1month">1 mois</button>
+                <button class="q-btn" data-preset="now-3months">3 mois</button>
+                <button class="q-btn" data-preset="now-6months">6 mois</button>
+                <button class="q-btn active" data-preset="now-1year">1 an</button>
+                <button class="q-btn" data-preset="custom">Date précise</button>
+              </div>
+              <input type="date" id="date-custom" class="hidden">
+            </div>
+          </div>
+
           <button id="p-dl-btn" class="dl-btn">Tout télécharger (.zip)</button>
         </div>
       </div>
@@ -162,6 +207,9 @@
             <span id="prog-speed"></span>
             <span id="prog-eta" style="margin-left: 8px;"></span>
           </div>
+        </div>
+        <div class="prog-actions">
+          <button type="button" id="prog-cancel-btn" class="mini-btn mini-btn-danger">Annuler</button>
         </div>
       </div>
 
@@ -194,6 +242,7 @@
 
   <script src="/static/persist.js"></script>
   <script src="/static/nav.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/downloads-queue.js?v=6"></script>
+  <script src="/static/app.js?v=5"></script>
 </body>
 </html>

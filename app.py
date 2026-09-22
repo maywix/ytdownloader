@@ -23,9 +23,43 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 import yt_dlp
+from yt_dlp.utils import DateRange, DownloadCancelled
 import mutagen
 from SpotiFLAC import AsyncSpotiFLAC
 from SpotiFLAC.core.spotify_metadata import SpotifyMetadataClient
+import SpotiFLAC.core.text_match as _spotiflac_text_match
+import SpotiFLAC.extensions.provider as _spotiflac_provider
+
+# Le repli "aucune métadonnée" de l'extension Amazon renvoie un titre
+# placeholder ("Amazon Track <ASIN>") au lieu d'un titre vide quand sa propre
+# recherche interne (showSearch, sur na.mesk.skill.music.a2z.com) échoue —
+# ce qui arrive dès que l'extension n'a pas de session Amazon authentifiée.
+# Le fichier audio, lui, se télécharge très bien (chemin CDN séparé, via le
+# ticket signé zarz). Mais provider.py compare ensuite found_title au titre
+# attendu et rejette comme "Wrong track", alors que track_identity_mismatch()
+# est explicitement conçue pour ignorer une métadonnée vide plutôt que de
+# rejeter — l'extension casse cette exemption en renvoyant une chaîne non
+# vide au lieu de "". On restaure l'exemption prévue en traitant ce
+# placeholder précis comme une métadonnée absente, sans toucher au reste de
+# la vérification (un vrai titre différent reste rejeté normalement).
+#
+# provider.py fait "from SpotiFLAC.core.text_match import
+# track_identity_mismatch" : patcher l'attribut du module text_match ne
+# suffit pas, il faut aussi réécrire la référence déjà importée dans
+# provider.py lui-même (résolue à l'appel, donc ce patch prend effet tout de
+# suite, sans redémarrage du process).
+_AMAZON_PLACEHOLDER_PREFIX = "Amazon Track "
+_original_track_identity_mismatch = _spotiflac_text_match.track_identity_mismatch
+
+
+def _patched_track_identity_mismatch(*, found_title="", **kwargs):
+    if str(found_title or "").startswith(_AMAZON_PLACEHOLDER_PREFIX):
+        found_title = ""
+    return _original_track_identity_mismatch(found_title=found_title, **kwargs)
+
+
+_spotiflac_text_match.track_identity_mismatch = _patched_track_identity_mismatch
+_spotiflac_provider.track_identity_mismatch = _patched_track_identity_mismatch
 from deezer import Deezer, TrackFormats
 from deemix import generateDownloadObject
 from deemix.settings import load as load_deemix_settings
@@ -664,6 +698,125 @@ def _clean(s: str, maxlen: int = 80) -> str:
     return "".join(c for c in s if c not in r'\/:*?"<>|')[:maxlen]
 
 
+def _fmt_size(num_bytes: int) -> str:
+    size = float(num_bytes)
+    if size < 1024:
+        return f"{size:.0f} o"
+    for unit in ("Ko", "Mo", "Go"):
+        size /= 1024
+        if size < 1024 or unit == "Go":
+            return f"{size:.1f} {unit}"
+    return f"{size:.1f} Go"
+
+
+def _dir_size_str(path: Path) -> str:
+    total = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+    return _fmt_size(total)
+
+
+def _cleanup_download_artifacts(download_id: str) -> None:
+    """Supprime tout fichier/dossier partiel laissé par un téléchargement
+    annulé (fichier unique DOWNLOAD_DIR/<id>.ext ou dossier DOWNLOAD_DIR/<id>
+    pour une playlist/collection)."""
+    for f in DOWNLOAD_DIR.glob(f"{download_id}*"):
+        try:
+            if f.is_dir():
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                f.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _is_youtube_channel_url(url: str) -> bool:
+    """Une chaîne (page @handle/channel/c/user), pas une playlist classique
+    ni une vidéo isolée — seules les chaînes proposent le filtrage par
+    intervalle/date, une playlist "list=" a déjà un ordre choisi par son auteur."""
+    if "list=" in url or "/watch" in url.lower():
+        return False
+    return bool(re.search(r"youtube\.com/(@[\w.\-]+|channel/|c/|user/)", url, re.IGNORECASE))
+
+
+def _channel_filter_opts(channel_scope: str, range_start, range_end, date_after) -> dict:
+    """Options yt-dlp pour restreindre une chaîne : par position
+    (playlist_items) ou par date de publication (daterange, qui accepte les
+    expressions relatives de yt-dlp comme "now-1year")."""
+    if channel_scope == "range":
+        try:
+            start = max(1, int(range_start or 1))
+            end = int(range_end or start)
+        except (TypeError, ValueError):
+            raise ValueError("Intervalle invalide")
+        if end < start:
+            start, end = end, start
+        return {"playlist_items": f"{start}-{end}"}
+
+    if channel_scope == "date":
+        if not date_after:
+            raise ValueError("Date de début manquante")
+        try:
+            return {"daterange": DateRange(date_after)}
+        except Exception as exc:
+            raise ValueError(f"Date invalide : {exc}")
+
+    return {}
+
+
+# Dolby Atmos Music est toujours livré en codec objet Dolby (E-AC-3/JOC,
+# jamais en PCM lossless) : quand une source n'a pas pu résoudre le vrai
+# flux Atmos (ex. Amazon sans session valide, cf. contournement Wrong-track
+# plus haut), elle retombe parfois sur un FLAC/ALAC stéréo classique sans le
+# signaler — un "succès" qui n'est pas le contenu demandé. On vérifie le
+# codec réel après coup plutôt que de faire confiance à l'étiquette de
+# qualité demandée.
+_NEVER_ATMOS_CODECS = {"flac", "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le", "wavpack", "tta"}
+
+
+def _audio_codec(filepath: Path) -> str | None:
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(filepath)],
+            capture_output=True, text=True, timeout=15,
+        )
+        return out.stdout.strip().lower() or None
+    except Exception:
+        return None
+
+
+# Même angle mort que Dolby Atmos, moins sévère : une source qui ne trouve
+# pas le vrai master Hi-Res peut discrètement renvoyer du CD-quality
+# (16 bits / 44.1 kHz) en le faisant passer pour du Hi-Res. On ne bloque que
+# le cas sans équivoque (ni le bit depth ni la fréquence ne dépassent le
+# CD) — un 24 bits/44.1 kHz reste un vrai Hi-Res légitime.
+_CD_SAMPLE_RATE = 44100
+_CD_BIT_DEPTH = 16
+
+
+def _audio_specs(filepath: Path) -> tuple[int, int]:
+    """(sample_rate_hz, bit_depth) du premier flux audio, (0, 0) si indisponible."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=sample_rate,bits_per_raw_sample,bits_per_sample",
+             "-of", "csv=p=0", str(filepath)],
+            capture_output=True, text=True, timeout=15,
+        )
+        parts = out.stdout.strip().split(",")
+        sample_rate = int(parts[0]) if parts and parts[0].strip().isdigit() else 0
+        bits = max((int(p) for p in parts[1:] if p.strip().isdigit()), default=0)
+        return sample_rate, bits
+    except Exception:
+        return 0, 0
+
+
+def _is_fake_hires(filepath: Path) -> bool:
+    sample_rate, bits = _audio_specs(filepath)
+    if sample_rate == 0 and bits == 0:
+        return False  # ffprobe indisponible/illisible : ne pas bloquer sur notre propre incapacité à vérifier
+    return sample_rate <= _CD_SAMPLE_RATE and bits <= _CD_BIT_DEPTH
+
+
 def _fetch_lyrics(title: str, artist: str, album: str, duration: int | None = None) -> str:
     """Retourne les paroles de LRCLIB lorsque le morceau est référencé."""
     params = {"track_name": title, "artist_name": artist, "album_name": album}
@@ -855,6 +1008,7 @@ def get_info():
                 "count": len(entries),
                 "url": url,
                 "audio_only": is_audio_only,
+                "is_channel": _is_youtube_channel_url(url),
             })
 
         fmts = info.get("formats") or []
@@ -1112,6 +1266,10 @@ def start_download():
     quality = data.get("quality", "1080")
     mode = data.get("mode", "single")
     spoti_data = data.get("spoti_data")
+    channel_scope = data.get("channel_scope", "all")
+    range_start = data.get("range_start")
+    range_end = data.get("range_end")
+    date_after = data.get("date_after")
 
     if not url and not spoti_data:
         return jsonify({"error": "URL manquante"}), 400
@@ -1129,11 +1287,12 @@ def start_download():
         "total": 1,
         "is_playlist": mode in ("playlist", "spoti_album"),
         "error": None,
+        "cancel_requested": False,
     }
 
     t = threading.Thread(
         target=_download_thread,
-        args=(download_id, url, fmt, quality, mode, spoti_data),
+        args=(download_id, url, fmt, quality, mode, spoti_data, channel_scope, range_start, range_end, date_after),
         daemon=True,
     )
     t.start()
@@ -1141,7 +1300,10 @@ def start_download():
     return jsonify({"download_id": download_id})
 
 
-def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: str, spoti_data: dict | None):
+def _download_thread(
+    download_id: str, url: str, fmt: str, quality: str, mode: str, spoti_data: dict | None,
+    channel_scope: str = "all", range_start=None, range_end=None, date_after: str | None = None,
+):
     state = downloads[download_id]
 
     if mode == "spoti_album" or (spoti_data and spoti_data.get("tracks")):
@@ -1159,7 +1321,7 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
             settings = spoti_data.get("settings") or {}
             source_quality = settings.get("source_quality", "LOSSLESS")
             transcode_to = settings.get("transcode_to", "flac")
-            if source_quality not in {"LOSSLESS", "HI_RES_LOSSLESS", "HI_RES", "HIGH", "LOW"}:
+            if source_quality not in {"LOSSLESS", "HI_RES_LOSSLESS", "HI_RES", "HIGH", "LOW", "DOLBY_ATMOS"}:
                 raise ValueError("Qualité SpotiFLAC invalide")
             if transcode_to not in {"flac", "alac", "wavpack", "tta", "wav", "aiff", "mp3", None}:
                 raise ValueError("Format de sortie SpotiFLAC invalide")
@@ -1233,16 +1395,54 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
                         return await client.download_tracks(track_urls)
                     return await client.download_track(spotify_url)
 
-            failed_tracks = asyncio.run(_run_spotiflac())
+            if state.get("cancel_requested"):
+                state["status"] = "cancelled"
+                _cleanup_download_artifacts(download_id)
+                return
+
+            # Boucle asyncio gérée à la main (plutôt qu'asyncio.run) pour
+            # pouvoir annuler la tâche depuis /api/cancel, appelée depuis un
+            # autre thread (call_soon_threadsafe est la seule façon sûre de
+            # toucher un event loop qui tourne ailleurs).
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                task = loop.create_task(_run_spotiflac())
+                state["_asyncio_cancel"] = {"loop": loop, "task": task}
+                failed_tracks = loop.run_until_complete(task)
+            except asyncio.CancelledError:
+                state["status"] = "cancelled"
+                _cleanup_download_artifacts(download_id)
+                return
+            finally:
+                state["_asyncio_cancel"] = None
+                loop.close()
+
             files = [file for file in out_dir.rglob("*") if file.suffix.lower() in {".flac", ".m4a", ".wv", ".tta", ".wav", ".aiff", ".mp3"}]
             if not files or (isinstance(failed_tracks, list) and failed_tracks):
                 raise RuntimeError("Aucun fournisseur SpotiFLAC n'a fourni le contenu demandé")
+
+            # Une source qui ne trouve pas le vrai master Atmos/Hi-Res peut
+            # discrètement renvoyer du stéréo/CD-quality classique en le
+            # faisant passer pour la qualité demandée (cf. contournement
+            # Wrong-track plus haut). On ne supprime plus le fichier dans ce
+            # cas : il reste utilisable (c'est quand même de la musique), on
+            # se contente de prévenir plutôt que de forcer un échec — le
+            # choix de le garder ou de réessayer revient à l'utilisateur.
+            quality_mismatch = None
+            if source_quality == "DOLBY_ATMOS":
+                if any(_audio_codec(f) in _NEVER_ATMOS_CODECS for f in files):
+                    quality_mismatch = "Qualité CD trouvée, pas de vrai Dolby Atmos (source repliée en stéréo classique)."
+            elif source_quality in {"HI_RES_LOSSLESS", "HI_RES"} and transcode_to != "mp3":
+                if any(_is_fake_hires(f) for f in files):
+                    quality_mismatch = "Qualité CD trouvée (16 bits/44.1 kHz), pas de vrai Hi-Res."
 
             state["status"] = "done"
             state["progress"] = 100
             state["current"] = state["total"]
             state["filepath"] = str(out_dir)
             state["filename"] = f"{_clean(album_artist)} - {_clean(album_title)} ({source_quality})"
+            state["quality_mismatch"] = quality_mismatch
 
         except Exception as e:
             state["status"] = "error"
@@ -1250,6 +1450,15 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
         return
 
     is_playlist = mode == "playlist"
+
+    channel_filter_opts = {}
+    if is_playlist and channel_scope in ("range", "date"):
+        try:
+            channel_filter_opts = _channel_filter_opts(channel_scope, range_start, range_end, date_after)
+        except ValueError as e:
+            state["status"] = "error"
+            state["error"] = str(e)
+            return
 
     if is_playlist:
         out_dir = DOWNLOAD_DIR / download_id
@@ -1259,6 +1468,8 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
         out_tmpl = str(DOWNLOAD_DIR / f"{download_id}.%(ext)s")
 
     def progress_hook(d):
+        if state.get("cancel_requested"):
+            raise DownloadCancelled("Annulé par l'utilisateur")
         if d["status"] == "downloading":
             try:
                 pct = float(d.get("_percent_str", "0%").strip().replace("%", ""))
@@ -1382,23 +1593,38 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
         }
         expected_ext = ".mp4"
 
+    if channel_filter_opts:
+        ydl_opts.update(channel_filter_opts)
+
     try:
         if is_playlist:
-            with yt_dlp.YoutubeDL(_info_ydl_opts({"extract_flat": True})) as ydl:
+            # "daterange" filtre par métadonnée complète (upload_date), pas
+            # disponible en extraction "flat" : le total ci-dessous reste une
+            # estimation haute pour ce cas (recompté sur disque une fois fini).
+            flat_extra = {"extract_flat": True}
+            if "playlist_items" in channel_filter_opts:
+                flat_extra["playlist_items"] = channel_filter_opts["playlist_items"]
+            with yt_dlp.YoutubeDL(_info_ydl_opts(flat_extra)) as ydl:
                 flat = ydl.extract_info(url, download=False)
             state["total"] = len([e for e in (flat.get("entries") or []) if e])
             state["current"] = 1
+
+        if state.get("cancel_requested"):
+            state["status"] = "cancelled"
+            _cleanup_download_artifacts(download_id)
+            return
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
 
         if is_playlist:
+            actual_files = [f for f in out_dir.rglob("*") if f.is_file()]
             state["status"] = "done"
             state["progress"] = 100
-            state["filepath"] = str(DOWNLOAD_DIR / download_id)
-            total = state["total"]
+            state["filepath"] = str(out_dir)
             title = info.get("title") or "playlist"
-            state["filename"] = f"{_clean(title)} ({total} fichiers)"
+            size_str = _dir_size_str(out_dir)
+            state["filename"] = f"{_clean(title)} ({len(actual_files)} fichiers, {size_str})"
         else:
             filepath = DOWNLOAD_DIR / f"{download_id}{expected_ext}"
             if not filepath.exists():
@@ -1413,6 +1639,9 @@ def _download_thread(download_id: str, url: str, fmt: str, quality: str, mode: s
             state["filepath"] = str(filepath)
             state["filename"] = f"{_clean(title)}{expected_ext}"
 
+    except DownloadCancelled:
+        state["status"] = "cancelled"
+        _cleanup_download_artifacts(download_id)
     except Exception as e:
         state["status"] = "error"
         state["error"] = str(e)
@@ -1423,7 +1652,35 @@ def get_progress(download_id):
     d = downloads.get(download_id)
     if d is None:
         return jsonify({"error": "Introuvable"}), 404
-    return jsonify({k: v for k, v in d.items() if k != "filepath"})
+    return jsonify({k: v for k, v in d.items() if k != "filepath" and not k.startswith("_")})
+
+
+@app.route("/api/cancel/<download_id>", methods=["POST"])
+def cancel_download(download_id):
+    state = downloads.get(download_id)
+    if state is None:
+        return jsonify({"error": "Introuvable"}), 404
+    if state.get("status") in ("done", "error", "cancelled"):
+        return jsonify({"status": state["status"]})
+
+    state["cancel_requested"] = True
+
+    # SpotiFLAC (mode spoti_album) : le téléchargement tourne dans une boucle
+    # asyncio dédiée à ce thread, on annule sa tâche depuis cette requête via
+    # call_soon_threadsafe (seul moyen sûr de toucher un event loop depuis un
+    # autre thread).
+    cancel_ctx = state.get("_asyncio_cancel")
+    if cancel_ctx and cancel_ctx.get("loop") and cancel_ctx.get("task"):
+        loop, task = cancel_ctx["loop"], cancel_ctx["task"]
+        loop.call_soon_threadsafe(task.cancel)
+
+    # Deemix : le Downloader consulte isCanceled avant chaque piste et
+    # interrompt la collection dès la prochaine vérification.
+    deemix_object = state.get("_deemix_object")
+    if deemix_object is not None:
+        deemix_object.isCanceled = True
+
+    return jsonify({"status": "cancelling"})
 
 
 @app.route("/api/file/<download_id>")
@@ -1741,6 +1998,8 @@ def deemix_download():
     data = request.get_json() or {}
     url = (data.get("url") or "").strip()
     quality = data.get("quality", "FLAC")
+    settings = data.get("settings") or {}
+    selected_tracks = data.get("selected_tracks")
     if not url:
         return jsonify({"error": "URL manquante"}), 400
     if quality not in DEEMIX_QUALITY_MAP:
@@ -1751,9 +2010,13 @@ def deemix_download():
     download_id = uuid.uuid4().hex
     downloads[download_id] = {
         "progress": 0, "status": "starting", "current": 0, "total": 1,
-        "is_playlist": False, "error": None,
+        "is_playlist": False, "error": None, "cancel_requested": False,
     }
-    t = threading.Thread(target=_deemix_download_thread, args=(download_id, url, quality), daemon=True)
+    t = threading.Thread(
+        target=_deemix_download_thread,
+        args=(download_id, url, quality, settings, selected_tracks),
+        daemon=True,
+    )
     t.start()
     return jsonify({"download_id": download_id})
 
@@ -1818,10 +2081,17 @@ def _generate_deezer_artist_top(dz, artist_id: str, bitrate: int):
     )
 
 
-def _deemix_download_thread(download_id: str, url: str, quality: str):
+def _deemix_download_thread(
+    download_id: str,
+    url: str,
+    quality: str,
+    user_settings: dict | None = None,
+    selected_tracks: list | None = None,
+):
     state = downloads[download_id]
     out_dir = DOWNLOAD_DIR / download_id
     out_dir.mkdir(exist_ok=True)
+    user_settings = user_settings or {}
     try:
         state["current_title"] = "Connexion à Deezer..."
         dz = _deemix_login()
@@ -1849,23 +2119,55 @@ def _deemix_download_thread(download_id: str, url: str, quality: str):
         if isinstance(download_object, list):
             raise RuntimeError("Ce lien correspond à plusieurs éléments distincts, non pris en charge par Deemix.")
 
+        # Sélection de pistes (style SpotiFLAC) : selected_tracks est la liste
+        # des positions 1-based cochées. Une Collection expose sa tracklist
+        # brute dans .collection, dans le même ordre que l'API Deezer d'où
+        # elles viennent — donc le même ordre que /api/deemix/info.
+        if selected_tracks and hasattr(download_object, "collection"):
+            want = {int(i) for i in selected_tracks}
+            download_object.collection = [
+                t for i, t in enumerate(download_object.collection, 1) if i in want
+            ]
+            download_object.size = len(download_object.collection) or 1
+
         total = getattr(download_object, "size", 1) or 1
         state["total"] = total
         state["is_playlist"] = total > 1
         state["status"] = "downloading"
+        # Le Downloader deemix consulte cet attribut avant chaque piste
+        # (voir deemix.downloader.Downloader.download) : le mettre à True
+        # interrompt la collection proprement.
+        state["_deemix_object"] = download_object
+
+        if state.get("cancel_requested"):
+            state["status"] = "cancelled"
+            _cleanup_download_artifacts(download_id)
+            return
 
         settings = deepcopy(DEEMIX_SETTINGS)
         settings.update({
             "downloadLocation": str(out_dir),
             "maxBitrate": str(bitrate),
-            "createPlaylistFolder": False,
-            "createArtistFolder": False,
-            "createAlbumFolder": total > 1,
+            "createPlaylistFolder": bool(user_settings.get("playlist_folders", False)),
+            "createArtistFolder": bool(user_settings.get("artist_folders", False)),
+            "createAlbumFolder": user_settings.get("album_folders", total > 1),
             "createSingleFolder": False,
             "fallbackBitrate": True,
+            "fallbackSearch": bool(user_settings.get("allow_fallback", True)),
+            "fallbackISRC": bool(user_settings.get("allow_fallback", True)),
+            "queueConcurrency": max(1, min(4, int(user_settings.get("concurrency", 3) or 3))),
+            "syncedLyrics": bool(user_settings.get("save_lrc", False)),
+            "featuredToTitle": "0" if user_settings.get("keep_featuring", True) else "1",
         })
+        embed_lyrics = bool(user_settings.get("embed_lyrics", True))
+        settings["tags"] = {**settings.get("tags", {}), "lyrics": embed_lyrics, "syncedLyrics": embed_lyrics}
 
         Downloader(dz, download_object, settings, _DeemixProgressListener(state)).start()
+
+        if state.get("cancel_requested") or download_object.isCanceled:
+            state["status"] = "cancelled"
+            _cleanup_download_artifacts(download_id)
+            return
 
         errors = getattr(download_object, "errors", [])
         files = [f for f in out_dir.rglob("*") if f.is_file() and f.suffix.lower() in {".flac", ".mp3"}]
@@ -1894,5 +2196,5 @@ def _deemix_download_thread(download_id: str, url: str, quality: str):
 
 
 if __name__ == "__main__":
-    print("\n  YTDown + SpotiFLAC → http://localhost:8080\n")
+    print("\n  Eclypse Downloader → http://localhost:8080\n")
     app.run(host="0.0.0.0", port=8080, debug=False, threaded=True)

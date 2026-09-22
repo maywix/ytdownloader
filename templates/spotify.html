@@ -3,28 +3,30 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SpotiFLAC — YTDown</title>
+  <title>SpotiFLAC — Eclypse Downloader</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="app">
     <header>
       <div class="header-top">
-        <h1 class="logo">SpotiFLAC <span class="beta-badge">BÊTA</span></h1>
-        <div class="service-switch" id="service-switch">
-          <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
-            <span>SpotiFLAC</span>
-            <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
-          </button>
-          <div class="service-menu hidden" id="service-menu">
-            <a class="service-item" href="/"><strong>YTDown</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
-            <a class="service-item current" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
-            <a class="service-item" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
+        <h1 class="logo">Eclypse<span class="logo-mode">SpotiFLAC</span> <span class="beta-badge">BÊTA</span></h1>
+        <div class="header-actions">
+          <div class="service-switch" id="service-switch">
+            <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
+              <span>SpotiFLAC</span>
+              <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+            </button>
+            <div class="service-menu hidden" id="service-menu">
+              <a class="service-item" href="/"><strong>Eclypse</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
+              <a class="service-item current" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
+              <a class="service-item" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
+            </div>
           </div>
-        </div>
-        <div class="version-badge hidden" id="spotify-version-badge">
-          <span class="version-dot"></span>
-          <span id="spotify-v-text">SpotiFLAC</span>
+          <div class="version-badge hidden" id="spotify-version-badge">
+            <span class="version-dot"></span>
+            <span id="spotify-v-text">SpotiFLAC</span>
+          </div>
         </div>
       </div>
       <p class="tagline">Téléchargez de la musique en haute qualité (Lossless, Hi-Res...) depuis Spotify, Tidal, Qobuz, Deezer, Amazon Music et SoundCloud. Recherchez un titre ou collez un lien direct vers un morceau, un album, un artiste ou une playlist.</p>
@@ -49,6 +51,10 @@
             <span id="spotify-search-spinner" class="spinner hidden"></span>
           </button>
         </div>
+        <label class="auto-dl-row">
+          <input type="checkbox" id="spotify-auto-dl" data-auto-dl checked>
+          <span>Télécharger automatiquement à la fin</span>
+        </label>
         <div class="fmt-tabs" id="spotify-search-filters">
           <button type="button" class="fmt-tab active" data-filter="all">Tout</button>
           <button type="button" class="fmt-tab" data-filter="track">Titres</button>
@@ -62,6 +68,11 @@
 
       <div id="spotify-error" class="error hidden"></div>
 
+      <button type="button" id="spotify-back-btn" class="back-btn hidden">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>
+        Retour
+      </button>
+
       <section id="spotify-card" class="card hidden">
         <div class="thumb-wrap">
           <img id="spotify-cover" src="" alt="Pochette Spotify">
@@ -73,15 +84,9 @@
             <p id="spotify-artist" class="meta-sub"></p>
           </div>
           <div class="settings-head">
-            <p class="meta-sub">Sources, qualité &amp; format</p>
-            <button type="button" class="gear-btn" id="spotify-settings-toggle" aria-expanded="false" aria-controls="spotify-settings-panel" title="Réglages SpotiFLAC">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="3"></circle>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-              </svg>
-            </button>
+            <p class="label">Sources, qualité &amp; format</p>
           </div>
-          <div id="spotify-settings-panel" class="settings-panel hidden">
+          <div id="spotify-settings-panel" class="settings-panel">
             <div>
               <p class="meta-sub">Sources SpotiFLAC</p>
               <div class="fmt-tabs" id="spotify-source-tabs">
@@ -95,12 +100,14 @@
             <div>
               <p class="meta-sub">Qualité de la source</p>
               <div class="q-grid" id="spotify-quality-tabs">
+                <button type="button" class="q-btn" data-quality="DOLBY_ATMOS">Dolby Atmos</button>
                 <button type="button" class="q-btn" data-quality="HI_RES_LOSSLESS">Hi-Res Max</button>
                 <button type="button" class="q-btn" data-quality="HI_RES">Hi-Res</button>
                 <button type="button" class="q-btn active" data-quality="LOSSLESS">Lossless</button>
                 <button type="button" class="q-btn" data-quality="HIGH">Haute</button>
                 <button type="button" class="q-btn" data-quality="LOW">Basse</button>
               </div>
+              <p class="meta-sub settings-hint hidden" id="spotify-atmos-hint">Uniquement disponible sur Tidal et Amazon Music (Qobuz/Deezer n'ont pas d'Atmos) — sources verrouillées sur ces deux-là. Format .m4a conservé tel quel, pas de conversion.</p>
             </div>
             <div>
               <p class="meta-sub">Format de sortie</p>
@@ -187,6 +194,9 @@
             <span id="spotify-progress-eta"></span>
           </div>
         </div>
+        <div class="prog-actions">
+          <button type="button" id="spotify-progress-cancel" class="mini-btn mini-btn-danger">Annuler</button>
+        </div>
       </section>
 
       <section id="spotify-done" class="card done-card hidden">
@@ -201,6 +211,7 @@
   </div>
   <script src="/static/persist.js"></script>
   <script src="/static/nav.js"></script>
-  <script src="/static/spotify.js?v=6"></script>
+  <script src="/static/downloads-queue.js?v=5"></script>
+  <script src="/static/spotify.js?v=16"></script>
 </body>
 </html>

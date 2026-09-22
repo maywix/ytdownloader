@@ -3,28 +3,30 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Deemix — YTDown</title>
+  <title>Deemix — Eclypse Downloader</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="app">
     <header>
       <div class="header-top">
-        <h1 class="logo">Deemix <span class="beta-badge">BÊTA</span></h1>
-        <div class="service-switch" id="service-switch">
-          <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
-            <span>Deemix</span>
-            <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
-          </button>
-          <div class="service-menu hidden" id="service-menu">
-            <a class="service-item" href="/"><strong>YTDown</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
-            <a class="service-item" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
-            <a class="service-item current" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
+        <h1 class="logo">Eclypse<span class="logo-mode">Deemix</span> <span class="beta-badge">BÊTA</span></h1>
+        <div class="header-actions">
+          <div class="service-switch" id="service-switch">
+            <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
+              <span>Deemix</span>
+              <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+            </button>
+            <div class="service-menu hidden" id="service-menu">
+              <a class="service-item" href="/"><strong>Eclypse</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
+              <a class="service-item" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
+              <a class="service-item current" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
+            </div>
           </div>
-        </div>
-        <div class="version-badge hidden" id="deemix-version-badge">
-          <span class="version-dot"></span>
-          <span id="deemix-v-text">deemix</span>
+          <div class="version-badge hidden" id="deemix-version-badge">
+            <span class="version-dot"></span>
+            <span id="deemix-v-text">deemix</span>
+          </div>
         </div>
       </div>
       <p class="tagline">Téléchargez de la musique en qualité CD (FLAC lossless) depuis Deezer, via un lien Deezer direct ou un lien Spotify. Nécessite qu'un administrateur ait configuré un ARL Deezer valide.</p>
@@ -49,6 +51,10 @@
             <span id="deemix-search-spinner" class="spinner hidden"></span>
           </button>
         </div>
+        <label class="auto-dl-row">
+          <input type="checkbox" id="deemix-auto-dl" data-auto-dl checked>
+          <span>Télécharger automatiquement à la fin</span>
+        </label>
         <div class="fmt-tabs" id="deemix-search-filters">
           <button type="button" class="fmt-tab active" data-filter="all">Tout</button>
           <button type="button" class="fmt-tab" data-filter="track">Titres</button>
@@ -62,6 +68,11 @@
 
       <div id="deemix-error" class="error hidden"></div>
 
+      <button type="button" id="deemix-back-btn" class="back-btn hidden">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>
+        Retour
+      </button>
+
       <section id="deemix-card" class="card hidden">
         <div class="thumb-wrap">
           <img id="deemix-cover" src="" alt="Pochette">
@@ -72,16 +83,56 @@
             <h2 id="deemix-title"></h2>
             <p id="deemix-artist" class="meta-sub"></p>
           </div>
-          <div>
-            <p class="meta-sub">Qualité (Deezer, jusqu'à CD lossless)</p>
-            <div class="q-grid" id="deemix-quality-tabs">
-              <button type="button" class="q-btn active" data-quality="FLAC">FLAC (Lossless)</button>
-              <button type="button" class="q-btn" data-quality="MP3_320">MP3 320 kb/s</button>
-              <button type="button" class="q-btn" data-quality="MP3_128">MP3 128 kb/s</button>
+          <div class="settings-head">
+            <p class="label">Qualité &amp; réglages</p>
+          </div>
+          <div id="deemix-settings-panel" class="settings-panel">
+            <div>
+              <p class="meta-sub">Qualité (Deezer, jusqu'à CD lossless)</p>
+              <div class="q-grid" id="deemix-quality-tabs">
+                <button type="button" class="q-btn active" data-quality="FLAC">FLAC (Lossless)</button>
+                <button type="button" class="q-btn" data-quality="MP3_320">MP3 320 kb/s</button>
+                <button type="button" class="q-btn" data-quality="MP3_128">MP3 128 kb/s</button>
+              </div>
             </div>
+            <details class="adv-settings" id="deemix-advanced">
+              <summary>Réglages avancés <span class="summary-hint">paroles · classement · performance</span></summary>
+              <div class="settings-groups">
+                <div class="settings-group">
+                  <h4>Paroles</h4>
+                  <label class="toggle"><input id="deemix-setting-embed-lyrics" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Intégrer les paroles</span></label>
+                  <label class="toggle"><input id="deemix-setting-save-lrc" type="checkbox"><span class="switch"></span><span class="toggle-text">Fichier .lrc séparé</span></label>
+                </div>
+                <div class="settings-group">
+                  <h4>Classement des fichiers</h4>
+                  <label class="toggle"><input id="deemix-setting-artist-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par artiste</span></label>
+                  <label class="toggle"><input id="deemix-setting-album-folders" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Dossier par album</span></label>
+                  <label class="toggle"><input id="deemix-setting-playlist-folders" type="checkbox"><span class="switch"></span><span class="toggle-text">Dossier par playlist</span></label>
+                </div>
+                <div class="settings-group">
+                  <h4>Téléchargement</h4>
+                  <label class="toggle"><input id="deemix-setting-featuring" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Conserver les featurings</span></label>
+                  <label class="toggle"><input id="deemix-setting-fallback" type="checkbox" checked><span class="switch"></span><span class="toggle-text">Fournisseurs de secours</span></label>
+                </div>
+                <div class="settings-group">
+                  <h4>Performance</h4>
+                  <label class="toggle toggle-select"><span class="toggle-text">Téléchargements simultanés</span>
+                    <select id="deemix-setting-concurrency">
+                      <option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </details>
           </div>
           <div>
-            <p class="meta-sub">Pistes (<span id="deemix-track-count">0</span>)</p>
+            <div class="tracks-head">
+              <p class="meta-sub">Pistes (<span id="deemix-track-count">0</span>) · <span id="deemix-selected-count">0</span> sélectionnée(s)</p>
+              <div class="track-tools">
+                <button type="button" class="mini-btn" id="deemix-check-all">Tout</button>
+                <button type="button" class="mini-btn" id="deemix-uncheck-none">Aucun</button>
+              </div>
+            </div>
             <div id="deemix-tracks" class="track-list"></div>
           </div>
           <button id="deemix-download-btn" class="dl-btn">Télécharger</button>
@@ -97,6 +148,9 @@
         <div class="prog-meta">
           <span id="deemix-progress-current"></span>
         </div>
+        <div class="prog-actions">
+          <button type="button" id="deemix-progress-cancel" class="mini-btn mini-btn-danger">Annuler</button>
+        </div>
       </section>
 
       <section id="deemix-done" class="card done-card hidden">
@@ -111,6 +165,7 @@
   </div>
   <script src="/static/persist.js"></script>
   <script src="/static/nav.js"></script>
-  <script src="/static/deemix.js?v=2"></script>
+  <script src="/static/downloads-queue.js?v=5"></script>
+  <script src="/static/deemix.js?v=8"></script>
 </body>
 </html>

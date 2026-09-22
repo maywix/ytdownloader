@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const errorBox = document.getElementById('deemix-error');
   const card = document.getElementById('deemix-card');
   const progressCard = document.getElementById('deemix-progress');
+  const progressCancelBtn = document.getElementById('deemix-progress-cancel');
   const doneCard = document.getElementById('deemix-done');
   const downloadButton = document.getElementById('deemix-download-btn');
   const tracks = document.getElementById('deemix-tracks');
@@ -15,6 +16,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchSpinner = document.getElementById('deemix-search-spinner');
   const searchResults = document.getElementById('deemix-results');
   const searchSummary = document.getElementById('deemix-search-summary');
+  const autoDlChk = document.getElementById('deemix-auto-dl');
+  const backBtn = document.getElementById('deemix-back-btn');
 
   let deemixData = null;
   let selectedQuality = 'FLAC';
@@ -28,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const DOWNLOAD_KEY = 'deemix_download';
+  let activeDownloadId = null;
 
   const previewAudio = new Audio();
   let previewButton = null;
@@ -87,9 +91,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  document.getElementById('deemix-check-all').addEventListener('click', () => {
+    tracks.querySelectorAll('.track-check').forEach((box) => { box.checked = true; });
+    updateSelection();
+  });
+  document.getElementById('deemix-uncheck-none').addEventListener('click', () => {
+    tracks.querySelectorAll('.track-check').forEach((box) => { box.checked = false; });
+    updateSelection();
+  });
+
   downloadButton.addEventListener('click', startDownload);
 
-  async function analyseUrl() {
+  async function analyseUrl(fromSearch) {
     const url = urlInput.value.trim();
     if (!url) return;
 
@@ -106,6 +119,11 @@ document.addEventListener('DOMContentLoaded', () => {
       deemixData = data;
       renderMusic(data);
       show(card);
+      // Un lien collé + Analyser est une intention explicite de télécharger ce
+      // titre précis ; un clic sur un résultat de recherche est exploratoire
+      // (on veut d'abord voir les pistes/réglages) — l'auto-download ne se
+      // déclenche donc que dans le premier cas.
+      if (!fromSearch && autoDlChk.checked) downloadButton.click();
     } catch (error) {
       showError(error.message || 'Serveur inaccessible.');
     } finally {
@@ -126,9 +144,17 @@ document.addEventListener('DOMContentLoaded', () => {
     tracks.replaceChildren();
     list.forEach((track, index) => {
       const position = track.track_number || index + 1;
-      const row = document.createElement('div');
+      const row = document.createElement('label');
       row.className = 'track-row';
-      row.style.cursor = 'default';
+
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.className = 'track-check';
+      box.checked = true;
+      box.dataset.index = position;
+
+      const knob = document.createElement('span');
+      knob.className = 'switch';
 
       const num = document.createElement('span');
       num.className = 'track-num';
@@ -139,7 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
       text.append(Object.assign(document.createElement('strong'), { textContent: track.title || '' }));
       if (track.artist) text.append(Object.assign(document.createElement('span'), { textContent: ` — ${track.artist}` }));
 
-      row.append(num, text);
+      row.append(box, knob, num, text);
 
       if (track.preview) {
         const previewBtn = document.createElement('button');
@@ -147,15 +173,44 @@ document.addEventListener('DOMContentLoaded', () => {
         previewBtn.className = 'preview-btn';
         previewBtn.textContent = '▶';
         previewBtn.setAttribute('aria-label', 'Écouter un extrait');
-        previewBtn.addEventListener('click', () => togglePreview(track.preview, previewBtn));
+        previewBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          togglePreview(track.preview, previewBtn);
+        });
         row.appendChild(previewBtn);
       }
 
       tracks.appendChild(row);
     });
 
-    downloadButton.textContent = single ? 'Télécharger le morceau' : `Télécharger (${list.length} pistes)`;
-    downloadButton.disabled = list.length === 0;
+    if (list.length > 1) {
+      tracks.querySelectorAll('.track-check').forEach((box) => {
+        box.addEventListener('change', updateSelection);
+      });
+    }
+    updateSelection();
+  }
+
+  function selectedIndices() {
+    return Array.from(tracks.querySelectorAll('.track-check'))
+      .filter((box) => box.checked)
+      .map((box) => Number(box.dataset.index));
+  }
+
+  function updateSelection() {
+    const boxes = Array.from(tracks.querySelectorAll('.track-check'));
+    const total = boxes.length;
+    const count = boxes.filter((box) => box.checked).length;
+    document.getElementById('deemix-selected-count').textContent = count;
+    if (total > 1) {
+      downloadButton.textContent = count === 0
+        ? 'Aucune piste sélectionnée'
+        : (count === total ? `Télécharger (${total} pistes)` : `Télécharger la sélection (${count}/${total})`);
+    } else {
+      downloadButton.textContent = 'Télécharger le morceau';
+    }
+    downloadButton.disabled = count === 0;
   }
 
   async function searchMusic() {
@@ -201,6 +256,20 @@ document.addEventListener('DOMContentLoaded', () => {
       image.src = item.thumbnail || '';
       image.alt = item.title ? `Pochette : ${item.title}` : 'Pochette Deezer';
       cover.appendChild(image);
+      const quickDlBtn = document.createElement('button');
+      quickDlBtn.type = 'button';
+      quickDlBtn.className = 'quick-dl-btn';
+      quickDlBtn.title = 'Télécharger (FLAC)';
+      quickDlBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>';
+      quickDlBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        quickDlBtn.disabled = true;
+        window.DLQueue.quickDownloadDeemix(item.url, {
+          title: item.title, subtitle: item.artist || '', thumbnail: item.thumbnail,
+        }).finally(() => { quickDlBtn.disabled = false; });
+      });
+      cover.appendChild(quickDlBtn);
       const title = document.createElement('h3');
       title.textContent = item.title || 'Sans titre';
       const meta = document.createElement('p');
@@ -211,7 +280,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const selectResult = () => {
         urlInput.value = item.url || '';
         hide(searchResults);
-        analyseUrl();
+        analyseUrl(true);
       };
       result.addEventListener('click', selectResult);
       result.addEventListener('keydown', (event) => {
@@ -226,12 +295,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function startDownload() {
     if (!deemixData) return;
+    previewAudio.pause();
     downloadButton.disabled = true;
     hide(errorBox);
     hide(card);
     hide(doneCard);
     resetProgress();
     show(progressCard);
+
+    const total = (deemixData.tracks || []).length;
+    const selected = selectedIndices();
+    const payloadTracks = total > 1 && selected.length < total ? selected : null;
+
+    const queueEntry = window.DLQueue.add({
+      service: 'deemix', autoSave: autoDlChk.checked,
+      title: deemixData.title, subtitle: deemixData.artist || '', thumbnail: deemixData.thumbnail,
+    });
 
     try {
       const response = await fetch('/api/deemix/download', {
@@ -240,13 +319,18 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify({
           url: deemixData.url,
           quality: selectedQuality,
+          settings: collectSettings(),
+          ...(payloadTracks ? { selected_tracks: payloadTracks } : {}),
         }),
       });
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.error || 'Le téléchargement n’a pas pu démarrer.');
+      activeDownloadId = data.download_id;
+      window.DLQueue.attach(queueEntry, data.download_id);
       YTPersist.save(DOWNLOAD_KEY, { downloadId: data.download_id });
       pollProgress(data.download_id);
     } catch (error) {
+      window.DLQueue.fail(queueEntry, error.message || 'Serveur inaccessible.');
       hide(progressCard);
       downloadButton.disabled = false;
       showError(error.message || 'Serveur inaccessible.');
@@ -265,6 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
           clearInterval(polling);
           downloadButton.disabled = false;
           hide(progressCard);
+          activeDownloadId = null;
           document.getElementById('deemix-done-name').textContent = data.filename || '';
           document.getElementById('deemix-save-link').href = `/api/file/${downloadId}`;
           show(doneCard);
@@ -273,18 +358,38 @@ document.addEventListener('DOMContentLoaded', () => {
           clearInterval(polling);
           downloadButton.disabled = false;
           hide(progressCard);
+          activeDownloadId = null;
           showError(data.error || 'Erreur pendant le téléchargement.');
+          YTPersist.clear(DOWNLOAD_KEY);
+        } else if (data.status === 'cancelled') {
+          clearInterval(polling);
+          downloadButton.disabled = false;
+          hide(progressCard);
+          activeDownloadId = null;
           YTPersist.clear(DOWNLOAD_KEY);
         }
       } catch (error) {
         clearInterval(polling);
         downloadButton.disabled = false;
         hide(progressCard);
+        activeDownloadId = null;
         showError(error.message || 'Serveur inaccessible.');
         YTPersist.clear(DOWNLOAD_KEY);
       }
     }, 700);
   }
+
+  progressCancelBtn.addEventListener('click', async () => {
+    if (!activeDownloadId) return;
+    progressCancelBtn.disabled = true;
+    await window.DLQueue.cancelById(activeDownloadId);
+    clearInterval(polling);
+    hide(progressCard);
+    downloadButton.disabled = false;
+    YTPersist.clear(DOWNLOAD_KEY);
+    activeDownloadId = null;
+    progressCancelBtn.disabled = false;
+  });
 
   function updateProgress(data) {
     const progress = Math.min(100, Math.round(data.progress || 0));
@@ -299,6 +404,20 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('deemix-progress-pct').textContent = '0%';
     document.getElementById('deemix-progress-label').textContent = 'Démarrage...';
     document.getElementById('deemix-progress-current').textContent = '';
+  }
+
+  function collectSettings() {
+    const checked = (id) => document.getElementById(id).checked;
+    return {
+      embed_lyrics: checked('deemix-setting-embed-lyrics'),
+      save_lrc: checked('deemix-setting-save-lrc'),
+      artist_folders: checked('deemix-setting-artist-folders'),
+      album_folders: checked('deemix-setting-album-folders'),
+      playlist_folders: checked('deemix-setting-playlist-folders'),
+      keep_featuring: checked('deemix-setting-featuring'),
+      allow_fallback: checked('deemix-setting-fallback'),
+      concurrency: Number(document.getElementById('deemix-setting-concurrency').value),
+    };
   }
 
   function setLoading(isLoading) {
@@ -320,6 +439,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function show(element) { element.classList.remove('hidden'); }
   function hide(element) { element.classList.add('hidden'); }
+
+  // ── Bouton retour : visible dès qu'une carte résultat/progression/terminé
+  // est affichée, ramène à l'état de recherche initial sans recharger la
+  // page. Le téléchargement en cours continue côté serveur (resumable via
+  // YTPersist au prochain chargement) — "retour" arrête juste le suivi UI.
+  [card, progressCard, doneCard].forEach((el) => {
+    const observer = new MutationObserver(() => {
+      const anyVisible = [card, progressCard, doneCard].some((c) => !c.classList.contains('hidden'));
+      backBtn.classList.toggle('hidden', !anyVisible);
+    });
+    observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+  });
+  backBtn.addEventListener('click', () => {
+    clearInterval(polling);
+    hide(card);
+    hide(progressCard);
+    hide(doneCard);
+    hide(errorBox);
+    urlInput.value = '';
+    urlInput.focus();
+    if (latestSearchResults.length) show(searchResults);
+  });
 
   // ── Recherche restaurée uniquement lors d'un retour arrière du navigateur
   // (pas sur un simple rechargement ni une arrivée directe sur la page) ──
@@ -350,7 +491,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const response = await fetch(`/api/progress/${state.downloadId}`);
       const data = await response.json();
-      if (data.error || data.status === 'done' || data.status === 'error') {
+      if (data.error || data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
         YTPersist.clear(DOWNLOAD_KEY);
         return;
       }
@@ -359,6 +500,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updateProgress(data);
       show(progressCard);
       downloadButton.disabled = true;
+      activeDownloadId = state.downloadId;
       pollProgress(state.downloadId);
     } catch {
       /* pas grave : au pire on rate la reprise, le téléchargement continue quand même côté serveur */

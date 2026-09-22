@@ -40,9 +40,16 @@ header {
 
 .header-top {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+  gap: 16px;
   margin-bottom: 8px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .logo {
@@ -51,6 +58,19 @@ header {
   letter-spacing: -1px;
 }
 
+.logo-mode {
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: normal;
+  color: var(--muted2);
+  margin-left: 8px;
+}
+
+/* Position fixe en bas de l'écran : le badge arrive en async (fetch
+   /api/version) bien après le premier rendu. Dans le header, son apparition
+   décalait ou chevauchait le contenu autour (bug visuel signalé deux fois).
+   Complètement hors du flux de la page, il ne peut plus jamais rien bouger
+   ni recouvrir. */
 .version-badge {
   display: flex;
   align-items: center;
@@ -58,6 +78,16 @@ header {
   color: var(--muted);
   font-size: 11px;
   cursor: default;
+  position: fixed;
+  bottom: 14px;
+  right: 16px;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(4px);
+  padding: 5px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  z-index: 5;
 }
 
 .version-dot {
@@ -265,7 +295,7 @@ header {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--muted);
-  margin-bottom: -6px;
+  margin-bottom: 8px;
 }
 
 /* ─── Format tabs ─────────────────────────── */
@@ -325,6 +355,17 @@ header {
 .settings-hint {
   font-size: 11px;
   margin-top: 6px;
+}
+
+/* Air entre un intitulé de section (Qualité, Format, Sources...) et les
+   boutons juste en dessous : sans ça, .meta-sub n'a pas de margin et le
+   texte touche presque les tabs (bug visuel signalé). */
+.meta-sub + .fmt-tabs,
+.meta-sub + .q-grid,
+.meta-sub + .track-list,
+.meta-sub + #spotify-tracks,
+.meta-sub + #deemix-tracks {
+  margin-top: 10px;
 }
 
 .gear-btn {
@@ -432,6 +473,12 @@ header {
   color: var(--muted);
 }
 
+.prog-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 20px 16px;
+}
+
 /* ─── Done card ───────────────────────────── */
 .done-card {
   display: flex;
@@ -442,11 +489,19 @@ header {
   background: #080e08;
 }
 
+.done-card.quality-warning {
+  border-color: #3a2f0a;
+  background: #0e0a02;
+}
+
 .done-check {
   font-size: 18px;
   color: #4ade80;
   flex-shrink: 0;
 }
+
+.quality-warning .done-check { color: #facc15; }
+.quality-warning .done-info span { color: #eab308; white-space: normal; }
 
 .done-info {
   flex: 1;
@@ -476,6 +531,7 @@ header {
   font-size: 12px;
   font-weight: 700;
   text-decoration: none;
+  cursor: pointer;
   transition: opacity 0.15s;
 }
 
@@ -525,12 +581,124 @@ footer {
   font-weight: 500;
 }
 
+/* ─── Bouton retour ────────────────────────── */
+.back-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 6px 2px;
+  min-height: 32px;
+  transition: color 0.15s, transform 0.15s;
+}
+.back-btn:hover { color: var(--text); }
+.back-btn:active { transform: translateX(-2px); }
+.back-btn svg { flex-shrink: 0; }
+
+/* ─── Spinner ──────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: -2px;
+}
+
+.spinner-sm { width: 11px; height: 11px; border-width: 2px; }
+
+/* Boutons pleins (fond blanc, texte noir) : le spinner doit s'y voir aussi. */
+.input-row button .spinner,
+.dl-btn .spinner {
+  border-color: rgba(0,0,0,0.25);
+  border-top-color: #000;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.save-btn.loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.7;
+  cursor: wait;
+  pointer-events: none;
+}
+
+/* ─── Sélection d'intervalle / date pour une chaîne ───────────────────── */
+.scope-fields { margin-top: 10px; }
+
+.scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.scope-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted2);
+}
+
+.scope-row input[type="number"] {
+  width: 72px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+#date-custom {
+  margin-top: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  color-scheme: dark;
+}
+
+#channel-scope-section { margin-top: 4px; }
+
 /* ─── Utility ─────────────────────────────── */
 .hidden { display: none !important; }
 
 /* ─── Responsive ──────────────────────────── */
+@media (max-width: 600px) {
+  .app { padding: 24px 16px 90px; }
+  header { margin-bottom: 32px; }
+  .header-top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .header-actions { align-self: flex-start; }
+  .logo { font-size: 26px; }
+  .logo-mode { font-size: 13px; margin-left: 6px; }
+  .service-menu { left: 0; right: auto; width: min(320px, 90vw); }
+  .card-body { padding: 18px; gap: 16px; }
+  .back-btn { min-height: 40px; }
+}
+
 @media (max-width: 480px) {
-  .app { padding: 32px 14px 60px; }
+  .app { padding: 24px 14px 60px; }
   .input-row { flex-direction: column; }
   .input-row button { width: 100%; }
   .fmt-tabs { flex-wrap: wrap; }
@@ -540,29 +708,41 @@ footer {
 
 /* ─── Réglages avancés (switches) ────────── */
 .adv-settings {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border2);
   border-radius: 10px;
   padding: 0;
   margin: 4px 0 16px;
-  background: rgba(255,255,255,0.02);
+  background: rgba(255,255,255,0.035);
+  transition: border-color 0.15s, background 0.15s;
+}
+.adv-settings[open] {
+  background: rgba(255,255,255,0.05);
+  border-color: #555;
 }
 .adv-settings summary {
   cursor: pointer;
-  padding: 12px 14px;
+  padding: 13px 14px;
   font-size: 13px;
-  font-weight: 600;
-  color: var(--muted2);
+  font-weight: 700;
+  color: var(--text);
   list-style: none;
   display: flex;
   align-items: baseline;
   gap: 8px;
   user-select: none;
   min-height: 44px;
+  border-radius: 10px;
+  transition: background 0.15s;
 }
 .adv-settings summary::-webkit-details-marker { display: none; }
-.adv-settings summary::before { content: '▸'; transition: transform 0.15s; }
+.adv-settings summary::before {
+  content: '▸';
+  color: var(--muted2);
+  transition: transform 0.15s;
+}
 .adv-settings[open] summary::before { transform: rotate(90deg); }
-.adv-settings summary:hover { color: var(--text); }
+.adv-settings summary:hover { background: rgba(255,255,255,0.04); }
+.adv-settings:not([open]) summary:hover { color: var(--text); }
 .summary-hint { font-weight: 400; font-size: 11px; color: var(--muted); }
 
 .settings-groups {
@@ -854,4 +1034,210 @@ footer {
   border-radius: 2px;
   padding: 1px 5px;
   margin-left: auto;
+}
+
+/* ─── Gestionnaire de téléchargements global ────────────────────────── */
+.dlq-wrap { position: relative; }
+
+.dlq-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.dlq-btn:hover, .dlq-btn[aria-expanded="true"] { border-color: #555; }
+
+.dlq-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #fff;
+  color: #000;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.dlq-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 440px;
+  max-width: 92vw;
+  background: var(--card);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  z-index: 30;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+
+.dlq-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dlq-list {
+  max-height: 480px;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.dlq-empty {
+  padding: 20px 14px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dlq-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 4px;
+}
+.dlq-item + .dlq-item { margin-top: 2px; }
+.dlq-item:hover { background: rgba(255,255,255,0.03); }
+
+.dlq-thumb {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #111;
+}
+.dlq-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.dlq-body { flex: 1; min-width: 0; }
+.dlq-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dlq-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dlq-track {
+  height: 3px;
+  border-radius: 2px;
+  background: #1a1a1a;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.dlq-fill {
+  height: 100%;
+  background: #fff;
+  transition: width 0.3s;
+}
+.dlq-status {
+  font-size: 11px;
+  color: var(--muted2);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dlq-status-done { color: #4ade80; }
+.dlq-status-error { color: #f87171; }
+.dlq-status-warn { color: #eab308; white-space: normal; line-height: 1.4; }
+
+.mini-btn-warn { border-color: #a16207; color: #eab308; }
+.mini-btn-warn:hover { border-color: #eab308; color: #facc15; }
+
+.mini-btn-danger { border-color: #7f1d1d; color: #f87171; }
+.mini-btn-danger:hover { border-color: #f87171; color: #fca5a5; }
+
+.dlq-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.dlq-dismiss {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 3px;
+}
+.dlq-dismiss:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+
+/* ─── Bouton téléchargement rapide sur les cartes résultat ────────────── */
+.quick-dl-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: rgba(0,0,0,0.75);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.15s;
+  z-index: 2;
+}
+.quick-dl-btn:hover { background: #fff; color: #000; border-color: #fff; }
+.quick-dl-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+@media (max-width: 600px) {
+  .dlq-panel {
+    position: fixed;
+    top: auto; bottom: 0; left: 0; right: 0;
+    width: 100%; max-width: 100%;
+    border-radius: 14px 14px 0 0;
+    max-height: 85vh;
+    /* zone tactile home-indicator iOS sans coller le contenu au bord */
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .dlq-panel-head { padding: 14px 16px; font-size: 14px; }
+  .dlq-list { max-height: calc(85vh - 54px); padding: 8px; }
+  .dlq-item { padding: 10px 8px; gap: 12px; }
+  .dlq-thumb { width: 52px; height: 52px; }
+  .dlq-title { font-size: 13px; }
+  .dlq-meta, .dlq-status { font-size: 12px; }
+  .dlq-actions { gap: 8px; }
+  .dlq-dismiss { width: 32px; height: 32px; }
+  .mini-btn, .mini-btn-warn, .mini-btn-danger { min-height: 32px; padding: 6px 12px; font-size: 12px; }
+  #dlq-clear { min-height: 32px; }
 }
