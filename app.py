@@ -25,6 +25,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import yt_dlp
 from yt_dlp.utils import DateRange, DownloadCancelled
 import mutagen
+
+import amazon_music
+from amazon_music import AmazonMusicClient, AmazonMusicError, AmazonCancelled
 from SpotiFLAC import AsyncSpotiFLAC
 from SpotiFLAC.core.spotify_metadata import SpotifyMetadataClient
 import SpotiFLAC.core.text_match as _spotiflac_text_match
@@ -104,13 +107,16 @@ SPOTIFLAC_SERVICES = [
     if service.strip()
 ]
 # Sources que la page /spotify laisse choisir à l'utilisateur (menu réglages).
-SPOTIFLAC_ALLOWED_SERVICES = {"ext:tidal-web", "ext:qobuz-web", "ext:amazon", "ext:deezer"}
+SPOTIFLAC_ALLOWED_SERVICES = {"ext:tidal-web", "ext:qobuz-web", "ext:amazon", "ext:deezer", "amazon-account"}
 
 # ── Comptes & configuration admin (persistés hors du dépôt, voir .gitignore) ──
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 USERS_FILE = DATA_DIR / "users.json"
 ARLS_FILE = DATA_DIR / "arls.json"
+AMAZON_FILE = DATA_DIR / "amazon.json"
+AMAZON_KEYS_FILE = DATA_DIR / "amazon_keys.json"
+AMAZON_WVD_DIR = DATA_DIR / "widevine"
 SECRET_KEY_FILE = DATA_DIR / "secret_key.txt"
 _data_lock = threading.Lock()
 
@@ -254,6 +260,7 @@ def admin_dashboard():
         "admin.html",
         users=users_view,
         arls=arls_view,
+        amazon=_amazon_status(),
         current_user=session.get("username"),
     )
 
@@ -337,6 +344,157 @@ def admin_delete_arl(arl_id):
         arls = [a for a in arls if a["id"] != arl_id]
         _save_json(ARLS_FILE, arls)
     flash("ARL supprimé", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+# ── Compte Amazon Music « mon compte » (source amazon-account) ────────────────
+
+def _amazon_wvd_files() -> list[Path]:
+    if not AMAZON_WVD_DIR.exists():
+        return []
+    return sorted(AMAZON_WVD_DIR.glob("*.wvd"))
+
+
+def _pywidevine_available() -> bool:
+    try:
+        import pywidevine  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _amazon_client() -> AmazonMusicClient | None:
+    """Client direct Amazon Music si un cookie de compte est configuré."""
+    record = _load_json(AMAZON_FILE, {})
+    cookie = os.environ.get("AMAZON_COOKIE") or record.get("cookie") or ""
+    if not cookie:
+        return None
+    return AmazonMusicClient(
+        cookie,
+        keys_path=AMAZON_KEYS_FILE,
+        wvd_dir=AMAZON_WVD_DIR,
+        log=lambda msg: print(f"[amazon] {msg}"),
+    )
+
+
+def _amazon_status() -> dict:
+    record = _load_json(AMAZON_FILE, {})
+    wvd_files = _amazon_wvd_files()
+    return {
+        "configured": bool(os.environ.get("AMAZON_COOKIE") or record.get("cookie")),
+        "from_env": bool(os.environ.get("AMAZON_COOKIE")) and not record.get("cookie"),
+        "account": record.get("account") or {},
+        "added_at": record.get("added_at"),
+        "widevine": {
+            "cdm_installed": _pywidevine_available(),
+            "device_files": [f.name for f in wvd_files],
+            "ready": _pywidevine_available() and bool(wvd_files),
+        },
+    }
+
+
+def _validate_amazon_cookie(cookie: str) -> dict:
+    """Connecte le cookie auprès d'Amazon et renvoie l'état du compte.
+
+    Lève AmazonAuthError/AmazonMusicError avec un message exploitable si le
+    cookie est refusé — l'admin voit alors exactement quoi refaire.
+    """
+    client = AmazonMusicClient(cookie, keys_path=AMAZON_KEYS_FILE, wvd_dir=AMAZON_WVD_DIR)
+    info = client.account_info()
+    benefits = info.get("benefits") or []
+    unlimited = any("UNLIMITED" in str(b).upper() for b in benefits)
+    if not unlimited:
+        print(f"[amazon] avantages du compte : {benefits}")
+    return {
+        **info,
+        "unlimited": unlimited,
+    }
+
+
+@app.route("/api/amazon/status")
+def amazon_status():
+    status = _amazon_status()
+    # Vérification live légère : si configuré, on tente le rafraîchissement du
+    # compte pour distinguer « connecté » de « cookie expiré » sans casser
+    # l'affichage si Amazon ne répond pas.
+    if status["configured"]:
+        client = _amazon_client()
+        if client:
+            try:
+                info = client.account_info()
+                # On ne renvoie pas customer_id/marketplace au navigateur :
+                # seuls territoire et avantages utiles à l'affichage partent.
+                status["account"] = {
+                    "territory": info.get("territory"),
+                    "benefits": info.get("benefits") or [],
+                }
+                status["valid"] = True
+            except AmazonMusicError as e:
+                status["valid"] = False
+                status["error"] = str(e)
+    status["account"] = {
+        "territory": (status.get("account") or {}).get("territory"),
+        "benefits": (status.get("account") or {}).get("benefits") or [],
+    }
+    return jsonify(status)
+
+
+@app.route("/admin/amazon", methods=["POST"])
+@admin_required
+def admin_add_amazon():
+    cookie = request.form.get("cookie", "").strip()
+    if not cookie:
+        flash("Cookie Amazon manquant", "error")
+        return redirect(url_for("admin_dashboard"))
+    try:
+        account = _validate_amazon_cookie(cookie)
+    except AmazonMusicError as e:
+        flash(f"Cookie Amazon refusé : {e}", "error")
+        return redirect(url_for("admin_dashboard"))
+    with _data_lock:
+        _save_json(AMAZON_FILE, {
+            "cookie": cookie,
+            "account": account,
+            "added_at": datetime.utcnow().isoformat(),
+        })
+    benefits = ", ".join(account.get("benefits") or []) or "avantages inconnus"
+    flash(f"Compte Amazon Music connecté ({account.get('territory') or '?'}, {benefits})", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/amazon/delete", methods=["POST"])
+@admin_required
+def admin_delete_amazon():
+    with _data_lock:
+        _save_json(AMAZON_FILE, {})
+    flash("Compte Amazon Music déconnecté", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/amazon/wvd", methods=["POST"])
+@admin_required
+def admin_add_amazon_wvd():
+    uploaded = request.files.get("wvd")
+    if not uploaded or not uploaded.filename.lower().endswith(".wvd"):
+        flash("Fichier .wvd manquant ou mal nommé", "error")
+        return redirect(url_for("admin_dashboard"))
+    AMAZON_WVD_DIR.mkdir(exist_ok=True)
+    filename = re.sub(r"[^A-Za-z0-9_.-]", "_", Path(uploaded.filename).name)
+    uploaded.save(AMAZON_WVD_DIR / filename)
+    if not _pywidevine_available():
+        flash("Fichier .wvd enregistré, mais pywidevine n'est pas installé (pip install pywidevine) — le décryptage restera indisponible", "error")
+    else:
+        flash(f"Module Widevine {filename} enregistré", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/amazon/wvd/<name>/delete", methods=["POST"])
+@admin_required
+def admin_delete_amazon_wvd(name):
+    target = AMAZON_WVD_DIR / Path(name).name
+    if target.exists() and target.suffix == ".wvd":
+        target.unlink()
+    flash("Module Widevine supprimé", "success")
     return redirect(url_for("admin_dashboard"))
 
 
@@ -1300,6 +1458,118 @@ def start_download():
     return jsonify({"download_id": download_id})
 
 
+# ── Téléchargement « Amazon (mon compte) » (client direct, sans API tierce) ───
+
+def _download_amazon_account(
+    state: dict, spoti_data: dict, source_quality: str, transcode_to: str | None,
+    bitrate: str, settings: dict, out_dir: Path,
+) -> tuple[list[Path], list[str]]:
+    """Télécharge les pistes sélectionnées depuis le compte Amazon Music.
+
+    Retourne (fichiers produits, pistes en échec avec motif). Lève
+    AmazonCancelled si l'utilisateur annule — l'appelant gère le nettoyage.
+    """
+    client = _amazon_client()
+    if client is None:
+        raise RuntimeError(
+            "Source « Amazon (mon compte) » sélectionnée mais aucun compte "
+            "n'est connecté : ajoute le cookie music.amazon.com dans /admin."
+        )
+
+    tracks = spoti_data.get("tracks") or []
+    if not tracks:
+        tracks = [{
+            "title": spoti_data.get("title") or "Piste",
+            "artist": spoti_data.get("artist") or "",
+            "track_number": 1,
+            "duration_seconds": None,
+        }]
+    selected = spoti_data.get("selected_tracks")
+    if selected is not None:
+        want = {int(i) for i in selected}
+        tracks = [t for t in tracks if t.get("track_number") in want]
+
+    total = max(1, len(tracks))
+    state["total"] = total
+    album_title = spoti_data.get("title") or "Album"
+    spotify_cover = spoti_data.get("thumbnail") or ""
+    use_track_numbers = settings.get("use_track_numbers", True)
+
+    files: list[Path] = []
+    failed: list[str] = []
+
+    for index, track in enumerate(tracks, 1):
+        if state.get("cancel_requested"):
+            raise AmazonCancelled()
+        state["current"] = index
+        title = track.get("title") or f"Piste {index}"
+        artist = track.get("artist") or ""
+        state["current_title"] = f"Amazon (mon compte) : {title}"
+        try:
+            match = client.match_track(title, artist, track.get("duration_seconds"))
+            if not match:
+                raise AmazonMusicError("introuvable dans le catalogue Amazon")
+            reps = client.representations(match["asin"])
+            rep = amazon_music.pick_representation(reps, source_quality)
+            key = client.content_key(rep)
+
+            raw = out_dir / f".amz-{uuid.uuid4().hex}.cmaf"
+            base_progress = (index - 1) / total * 100
+
+            def _on_progress(done: int, total_bytes: int, _base=base_progress, _total=total, _idx=index):
+                frac = (done / total_bytes) if total_bytes else 0
+                state["progress"] = min(99.0, _base + frac / _total * 100)
+                state["current_title"] = f"Amazon (mon compte) : {title}"
+
+            client.download_representation(
+                rep, raw, on_progress=_on_progress,
+                cancel_check=lambda: bool(state.get("cancel_requested")),
+            )
+
+            if rep.codec == "flac":
+                ext = ".flac" if transcode_to in (None, "flac") else f".{transcode_to}"
+            elif rep.is_atmos:
+                ext = ".m4a"  # audio objet : pas de conversion (cf. hint Atmos)
+            else:
+                ext = ".m4a" if transcode_to is None else f".{transcode_to}"
+            prefix = f"{int(track.get('track_number') or index):02d} - " if use_track_numbers else ""
+            final = out_dir / f"{prefix}{_clean(title)}{ext}"
+            final = out_dir / _dedupe_path(final)
+            AmazonMusicClient.decrypt_and_mux(raw, rep, final, key, transcode_to, bitrate)
+            raw.unlink(missing_ok=True)
+
+            cover = match.get("cover") or spotify_cover
+            _embed_music_metadata(
+                final, title, artist or match.get("artist", ""), album_title,
+                track_num=int(track.get("track_number") or index), total_tracks=total,
+                cover_url=cover, duration=track.get("duration_seconds"),
+            )
+            files.append(final)
+            print(f"[amazon] {title} → {rep.label()} ({final.name})")
+        except AmazonCancelled:
+            raise
+        except AmazonMusicError as e:
+            failed.append(f"{title} ({e})")
+            print(f"[amazon] échec {title}: {e}")
+        except Exception as e:
+            failed.append(f"{title} ({e})")
+            print(f"[amazon] erreur inattendue {title}: {e}")
+
+    return files, failed
+
+
+def _dedupe_path(path: Path) -> str:
+    """Nom de fichier unique dans le dossier (sans écraser un existant)."""
+    if not path.exists():
+        return path.name
+    stem, suffix = path.stem, path.suffix
+    for n in range(2, 99):
+        candidate = path.with_name(f"{stem} ({n}){suffix}")
+        if not candidate.exists():
+            return candidate.name
+    return f"{uuid.uuid4().hex}{suffix}"
+
+
 def _download_thread(
     download_id: str, url: str, fmt: str, quality: str, mode: str, spoti_data: dict | None,
     channel_scope: str = "all", range_start=None, range_end=None, date_after: str | None = None,
@@ -1334,7 +1604,13 @@ def _download_thread(
                 if not services:
                     raise ValueError("Aucune source SpotiFLAC valide sélectionnée")
             else:
-                services = SPOTIFLAC_SERVICES
+                services = list(SPOTIFLAC_SERVICES)
+
+            # « Amazon (mon compte) » est téléchargé par le client direct
+            # intégré (amazon_music.py), pas par une extension SpotiFLAC : on
+            # le retire de la liste confiée à la lib et on le traite avant.
+            use_native_amazon = "amazon-account" in services
+            services = [s for s in services if s != "amazon-account"]
 
             state["current_title"] = "Recherche d'une source SpotiFLAC..."
 
@@ -1399,6 +1675,53 @@ def _download_thread(
                 state["status"] = "cancelled"
                 _cleanup_download_artifacts(download_id)
                 return
+
+            # Passe « Amazon (mon compte) » : si elle produit au moins un
+            # fichier, on ne lance PAS SpotiFLAC (pas de doublons dans le zip).
+            # Échec partiel → terminé avec avertissement ; échec total → repli
+            # sur les sources extensions si l'utilisateur en a coché.
+            native_warning = None
+            if use_native_amazon:
+                try:
+                    native_files, native_failed = _download_amazon_account(
+                        state, spoti_data, source_quality, transcode_to, bitrate, settings, out_dir,
+                    )
+                except AmazonCancelled:
+                    state["status"] = "cancelled"
+                    _cleanup_download_artifacts(download_id)
+                    return
+                if native_files:
+                    if native_failed:
+                        listing = "; ".join(native_failed[:3])
+                        more = f" (+{len(native_failed) - 3} autres)" if len(native_failed) > 3 else ""
+                        native_warning = (
+                            f"{len(native_failed)} piste(s) en échec sur Amazon (mon compte) : {listing}{more}."
+                        )
+                    files = native_files
+                    quality_mismatch = native_warning
+                    if source_quality == "DOLBY_ATMOS" and not native_warning:
+                        if any(_audio_codec(f) in _NEVER_ATMOS_CODECS for f in files):
+                            quality_mismatch = "Qualité CD trouvée, pas de vrai Dolby Atmos (source repliée en stéréo classique)."
+                    elif source_quality in {"HI_RES_LOSSLESS", "HI_RES"} and transcode_to != "mp3" and not native_warning:
+                        if any(_is_fake_hires(f) for f in files):
+                            quality_mismatch = "Qualité CD trouvée (16 bits/44.1 kHz), pas de vrai Hi-Res."
+                    state["status"] = "done"
+                    state["progress"] = 100
+                    state["current"] = state["total"]
+                    state["filepath"] = str(out_dir)
+                    state["filename"] = f"{_clean(album_artist)} - {_clean(album_title)} ({source_quality})"
+                    state["quality_mismatch"] = quality_mismatch
+                    return
+                # 0 fichier : on tente le repli extensions ci-dessous.
+
+            if not services:
+                raise RuntimeError(
+                    "Amazon (mon compte) n'a fourni aucun fichier et aucune "
+                    "autre source n'est cochée — vérifie le compte dans /admin "
+                    "ou coche une source de secours (Tidal, Qobuz…)."
+                )
+            if use_native_amazon:
+                state["current_title"] = "Amazon (mon compte) sans résultat, essai des sources classiques..."
 
             # Boucle asyncio gérée à la main (plutôt qu'asyncio.run) pour
             # pouvoir annuler la tâche depuis /api/cancel, appelée depuis un

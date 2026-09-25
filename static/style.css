@@ -150,6 +150,25 @@ header {
 .input-row input::placeholder { color: var(--muted); }
 .input-row input:focus { border-color: var(--border2); }
 
+/* Champs multi-lignes (cookie Amazon Music du panneau admin) */
+.input-row textarea {
+  flex: 1;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 13px 16px;
+  outline: none;
+  transition: border-color 0.15s;
+  min-width: 0;
+  resize: vertical;
+}
+
+.input-row textarea::placeholder { color: var(--muted); }
+.input-row textarea:focus { border-color: var(--border2); }
+
 .input-row button {
   flex-shrink: 0;
   background: #fff;

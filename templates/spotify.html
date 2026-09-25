@@ -91,12 +91,13 @@
             <div>
               <p class="meta-sub">Sources SpotiFLAC</p>
               <div class="fmt-tabs" id="spotify-source-tabs">
+                <button type="button" class="fmt-tab active" data-source="amazon-account" aria-pressed="true" title="Ton propre compte Amazon Music (connecté dans /admin) — lossless, Hi-Res et Dolby Atmos">Amazon (mon compte)</button>
                 <button type="button" class="fmt-tab active" data-source="ext:tidal-web" aria-pressed="true">Tidal</button>
                 <button type="button" class="fmt-tab active" data-source="ext:qobuz-web" aria-pressed="true">Qobuz</button>
                 <button type="button" class="fmt-tab active" data-source="ext:amazon" aria-pressed="true">Amazon Music</button>
                 <button type="button" class="fmt-tab active" data-source="ext:deezer" aria-pressed="true">Deezer</button>
               </div>
-              <p class="meta-sub settings-hint">Décochez les sources inutiles : SpotiFLAC ne les essaiera plus en secours, ce qui accélère surtout le téléchargement d'un album entier.</p>
+              <p class="meta-sub settings-hint">Décochez les sources inutiles : SpotiFLAC ne les essaiera plus en secours, ce qui accélère surtout le téléchargement d'un album entier. <span id="spotify-amazon-account-hint"></span></p>
             </div>
             <div>
               <p class="meta-sub">Qualité de la source</p>
@@ -108,7 +109,7 @@
                 <button type="button" class="q-btn" data-quality="HIGH">Haute</button>
                 <button type="button" class="q-btn" data-quality="LOW">Basse</button>
               </div>
-              <p class="meta-sub settings-hint hidden" id="spotify-atmos-hint">Uniquement disponible sur Tidal et Amazon Music (Qobuz/Deezer n'ont pas d'Atmos) — sources verrouillées sur ces deux-là. Format .m4a conservé tel quel, pas de conversion.</p>
+              <p class="meta-sub settings-hint hidden" id="spotify-atmos-hint">Uniquement disponible sur Tidal et Amazon (mon compte / Amazon Music — Qobuz/Deezer n'ont pas d'Atmos) — sources verrouillées sur celles-ci. Format .m4a conservé tel quel, pas de conversion.</p>
             </div>
             <div>
               <p class="meta-sub">Format de sortie</p>
@@ -213,6 +214,6 @@
   <script src="/static/persist.js"></script>
   <script src="/static/nav.js"></script>
   <script src="/static/downloads-queue.js?v=5"></script>
-  <script src="/static/spotify.js?v=16"></script>
+  <script src="/static/spotify.js?v=17"></script>
 </body>
 </html>

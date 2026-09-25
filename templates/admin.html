@@ -13,7 +13,7 @@
         <h1 class="logo">Admin</h1>
         <a class="fmt-tab" href="/admin/logout">Déconnexion ({{ current_user }})</a>
       </div>
-      <p class="tagline">Comptes Eclypse et ARL Deezer utilisés par Deemix.</p>
+      <p class="tagline">Comptes Eclypse, ARL Deezer (Deemix) et compte Amazon Music « mon compte ».</p>
     </header>
 
     <main>
@@ -67,6 +67,51 @@
             <div class="input-row"><input name="label" placeholder="Nom (ex : Compte perso)" autocomplete="off"></div>
             <div class="input-row"><input name="arl" placeholder="Valeur de l'ARL Deezer" autocomplete="off" required></div>
             <button type="submit" class="dl-btn">Ajouter l'ARL</button>
+          </form>
+        </div>
+      </section>
+      <section class="card">
+        <div class="card-body">
+          <h2 class="admin-h2">Compte Amazon Music « mon compte »</h2>
+          <p class="meta-sub">Connecte ton propre compte Amazon Music Unlimited : la source « Amazon (mon compte) » de la page SpotiFLAC télécharge directement depuis TON abonnement (lossless, Hi-Res et Dolby Atmos EC-3/AC-4), sans API tierce.</p>
+          <div class="admin-list">
+            {% if amazon.configured %}
+            <div class="admin-row">
+              <span>Compte connecté{% if amazon.account.territory %} — {{ amazon.account.territory }}{% endif %}{% if amazon.account.customer_id %} · {{ amazon.account.customer_id[:12] }}…{% endif %}{% if amazon.from_env %} · via AMAZON_COOKIE{% endif %}</span>
+              <span class="meta-sub">
+                {% if amazon.account.benefits %}{{ amazon.account.benefits | join(', ') }}{% else %}avantages inconnus{% endif %}
+              </span>
+              {% if not amazon.from_env %}
+              <form method="post" action="/admin/amazon/delete" class="admin-row-action">
+                <button type="submit" class="mini-btn">Déconnecter</button>
+              </form>
+              {% endif %}
+            </div>
+            {% else %}
+            <p class="meta-sub">Aucun compte connecté — la source « Amazon (mon compte) » est désactivée.</p>
+            {% endif %}
+          </div>
+          <form method="post" action="/admin/amazon" class="admin-form">
+            <div class="input-row"><textarea name="cookie" placeholder="Cookie complet du navigateur sur music.amazon.com (F12 → Réseau → n'importe quelle requête → Cookie)" rows="3" autocomplete="off" required></textarea></div>
+            <button type="submit" class="dl-btn">Connecter le compte</button>
+          </form>
+          <h2 class="admin-h2" style="margin-top: 18px;">Clé de décryptage Widevine (.wvd)</h2>
+          <p class="meta-sub">Les flux Amazon (FLAC HD, Hi-Res, Atmos) sont chiffrés Widevine. Place un module CDM L3 au format <code>.wvd</code> pour que l'app obtienne les clés avec ton compte.{% if not amazon.widevine.cdm_installed %} <strong>pywidevine n'est pas installé</strong> (pip install pywidevine).{% endif %}</p>
+          <div class="admin-list">
+            {% for w in amazon.widevine.device_files %}
+            <div class="admin-row">
+              <span><code>{{ w }}</code></span>
+              <form method="post" action="/admin/amazon/wvd/{{ w }}/delete" class="admin-row-action">
+                <button type="submit" class="mini-btn">Supprimer</button>
+              </form>
+            </div>
+            {% else %}
+            <p class="meta-sub">Aucun module .wvd — le décryptage échouera après le téléchargement des segments.</p>
+            {% endfor %}
+          </div>
+          <form method="post" action="/admin/amazon/wvd" class="admin-form" enctype="multipart/form-data">
+            <div class="input-row"><input type="file" name="wvd" accept=".wvd" required></div>
+            <button type="submit" class="dl-btn">Envoyer le module .wvd</button>
           </form>
         </div>
       </section>

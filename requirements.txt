@@ -5,3 +5,4 @@ requests>=2.31
 mutagen>=1.47
 SpotiFLAC
 deemix[spotify]
+pywidevine

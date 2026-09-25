@@ -84,13 +84,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const atmosHint = document.getElementById('spotify-atmos-hint');
   const formatSection = document.getElementById('spotify-format-tabs').parentElement;
-  const ATMOS_SOURCES = new Set(['ext:tidal-web', 'ext:amazon']);
+  const ATMOS_SOURCES = new Set(['ext:tidal-web', 'ext:amazon', 'amazon-account']);
+  let amazonAccountUsable = true;
   let sourcesBeforeAtmos = null;
+
+  // État de la source « Amazon (mon compte) » : bouton désactivé + hint si le
+  // cookie du compte n'est pas configuré (ou expiré) côté serveur.
+  (async function initAmazonAccountStatus() {
+    const button = document.querySelector('#spotify-source-tabs .fmt-tab[data-source="amazon-account"]');
+    const hint = document.getElementById('spotify-amazon-account-hint');
+    if (!button || !hint) return;
+    try {
+      const response = await fetch('/api/amazon/status');
+      const data = await response.json();
+      const wvd = data.widevine || {};
+      if (!data.configured) {
+        amazonAccountUsable = false;
+        hint.textContent = 'Amazon (mon compte) : non connecté — cookie à ajouter dans /admin.';
+      } else if (data.valid === false) {
+        amazonAccountUsable = false;
+        hint.textContent = `Amazon (mon compte) : cookie expiré (${data.error || 'à reconnecter dans /admin'}).`;
+      } else if (!wvd.ready) {
+        amazonAccountUsable = false;
+        hint.textContent = wvd.cdm_installed
+          ? 'Amazon (mon compte) : connecté, mais il manque le module .wvd dans /admin (décryptage Widevine).'
+          : 'Amazon (mon compte) : connecté, mais pywidevine/.wvd manquant (décryptage Widevine).';
+      } else {
+        hint.textContent = 'Amazon (mon compte) : connecté ✓ (lossless, Hi-Res et Dolby Atmos).';
+      }
+      if (!amazonAccountUsable) {
+        button.classList.remove('active');
+        button.classList.add('unavailable');
+        button.setAttribute('aria-pressed', 'false');
+        selectedSources = Array.from(document.querySelectorAll('#spotify-source-tabs .fmt-tab.active')).map((tab) => tab.dataset.source);
+      }
+    } catch (e) {
+      // Statut indisponible : on ne bloque pas la page, le téléchargement
+      // expliquera de toute façon s'il manque quelque chose.
+    }
+  })();
 
   function applyAtmosSourceLock(isAtmos) {
     const sourceButtons = document.querySelectorAll('#spotify-source-tabs .fmt-tab');
     if (isAtmos) {
-      // Dolby Atmos n'existe que sur Tidal et Amazon Music (comme l'appli
+      // Dolby Atmos n'existe que sur Tidal et Amazon (comme l'appli
       // officielle SpotiFLAC) : Qobuz/Deezer retombent en Hi-Res Max côté
       // lib, donc les laisser cochés faisait "réussir" le téléchargement
       // via un fallback silencieux en simple stéréo — d'où le "ça marche
@@ -98,7 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // vrai plutôt que de compter sur un repli silencieux.
       if (!sourcesBeforeAtmos) sourcesBeforeAtmos = Array.from(sourceButtons).map((b) => b.classList.contains('active'));
       sourceButtons.forEach((button) => {
-        const ok = ATMOS_SOURCES.has(button.dataset.source);
+        const ok = ATMOS_SOURCES.has(button.dataset.source) && (button.dataset.source !== 'amazon-account' || amazonAccountUsable);
         button.classList.toggle('active', ok);
         button.classList.toggle('unavailable', !ok);
         button.setAttribute('aria-pressed', String(ok));
@@ -132,6 +169,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.querySelectorAll('#spotify-source-tabs .fmt-tab').forEach((button) => {
     button.addEventListener('click', () => {
+      if (button.dataset.source === 'amazon-account' && !amazonAccountUsable) return;
       const active = document.querySelectorAll('#spotify-source-tabs .fmt-tab.active');
       if (active.length === 1 && button.classList.contains('active')) return;
       button.classList.toggle('active');
