@@ -93,8 +93,10 @@
           </div>
           <form method="post" action="/admin/amazon" class="admin-form">
             <div class="input-row"><textarea name="cookie" placeholder="Cookie complet du navigateur sur music.amazon.com (F12 → Réseau → n'importe quelle requête → Cookie)" rows="3" autocomplete="off" required></textarea></div>
+            <div class="input-row"><input name="proxy" placeholder="Proxy réservé à Amazon, optionnel (ex : socks5h://host.docker.internal:1080 ou http://…)" autocomplete="off" value="{{ amazon.proxy or '' }}"></div>
             <button type="submit" class="dl-btn">Connecter le compte</button>
           </form>
+          <p class="meta-sub">Astuce : si la connexion est refusée sans VPN depuis chez toi, mets ici le proxy de ton client VPN (l'app envoie alors <strong>uniquement</strong> le trafic Amazon dedans — SOCKS avec <code>socks5h://</code> conseillé, ou HTTP). Dans Docker, <code>host.docker.internal</code> désigne la machine hôte.</p>
           <h2 class="admin-h2" style="margin-top: 18px;">Clé de décryptage Widevine (.wvd)</h2>
           <p class="meta-sub">Les flux Amazon (FLAC HD, Hi-Res, Atmos) sont chiffrés Widevine. Place un module CDM L3 au format <code>.wvd</code> pour que l'app obtienne les clés avec ton compte.{% if not amazon.widevine.cdm_installed %} <strong>pywidevine n'est pas installé</strong> (pip install pywidevine).{% endif %}</p>
           <div class="admin-list">

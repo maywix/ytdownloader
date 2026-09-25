@@ -40,12 +40,33 @@ from pathlib import Path
 from typing import Callable, Iterable
 from urllib.parse import urljoin
 
-import requests
+# curl_cffi reproduit l'empreinte TLS d'un vrai Chrome : Amazon sert une
+# session anonyme aux clients Python « nus » (requests/urllib3) même avec un
+# cookie valide. Repli standard si curl_cffi manque.
+try:
+    from curl_cffi import requests as _http
+    _SESSION_KWARGS = {"impersonate": "chrome"}
+except ImportError:  # pragma: no cover
+    import requests as _http
+    _SESSION_KWARGS = {}
+
+import requests  # exceptions communes (RequestException existe dans les deux)
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36")
 MUSIC_BASE = "https://music.amazon.com"
 CLIENT_APPLICATION = "skyfire"
+
+# Host local du web player par territoire : un compte FR est mieux servi
+# (config + token + dmls) par music.amazon.fr que par le .com US.
+_TERRITORY_HOST = {
+    "US": "https://music.amazon.com", "CA": "https://music.amazon.com",
+    "MX": "https://music.amazon.com.mx", "BR": "https://music.amazon.com.br",
+    "GB": "https://music.amazon.co.uk", "DE": "https://music.amazon.de",
+    "FR": "https://music.amazon.fr", "IT": "https://music.amazon.it",
+    "ES": "https://music.amazon.es", "IN": "https://music.amazon.in",
+    "JP": "https://music.amazon.co.jp", "AU": "https://music.amazon.com.au",
+}
 
 # Territoire (musicTerritory) → segment d'URL (/{segment}/api/…) et préfixe
 # du host du catalogue. Repli « NA » comme dans le player.
@@ -325,7 +346,8 @@ class AmazonMusicClient:
     """
 
     def __init__(self, cookie_header: str, keys_path: Path | None = None,
-                 wvd_dir: Path | None = None, log: Callable[[str], None] | None = None):
+                 wvd_dir: Path | None = None, log: Callable[[str], None] | None = None,
+                 proxy: str | None = None):
         self.cookie = re.sub(r"\s*;\s*", "; ", str(cookie_header or "").strip()).strip("; ")
         if "=" not in self.cookie:
             raise AmazonAuthError(
@@ -335,8 +357,15 @@ class AmazonMusicClient:
         self.keys_path = Path(keys_path) if keys_path else None
         self.wvd_dir = Path(wvd_dir) if wvd_dir else None
         self._log = log or (lambda msg: None)
-        self._session = requests.Session()
+        # Proxy optionnel réservé au trafic Amazon : utile quand Amazon
+        # n'attache la session que depuis certaines IPs (ex. exit VPN).
+        # Préférer socks5h:// (DNS résolu côté proxy) ou http(s)://.
+        self.proxy = (proxy or "").strip() or None
+        self._session = _http.Session(**_SESSION_KWARGS)
+        if self.proxy:
+            self._session.proxies = {"http": self.proxy, "https": self.proxy}
         self._session.headers.update({"User-Agent": UA})
+        self._base = MUSIC_BASE
         self._cfg: dict = {}
         self._cfg_at = 0.0
 
@@ -347,43 +376,78 @@ class AmazonMusicClient:
         return self._cfg.get("musicTerritory") or "US"
 
     @property
+    def music_base(self) -> str:
+        return self._base
+
+    @property
     def segment(self) -> str:
         return _TERRITORY_SEGMENT.get(self.territory, "NA")
 
     def config(self, force: bool = False) -> dict:
         if self._cfg and not force and time.time() - self._cfg_at < 600:
             return self._cfg
-        try:
-            resp = self._session.get(
-                f"{MUSIC_BASE}/config.json",
-                params={"skipToken": "false", "clientApplication": CLIENT_APPLICATION},
-                headers={"Cookie": self.cookie, "Accept": "application/json",
-                         "Referer": f"{MUSIC_BASE}/"},
-                timeout=20,
-            )
-            resp.raise_for_status()
-            cfg = resp.json()
-        except Exception as e:
-            raise AmazonAuthError(f"Connexion à music.amazon.com impossible : {e}") from e
+        cfg = self._fetch_config(MUSIC_BASE)
+        # Un compte FR/DE/… est servi par le host local de son marché :
+        # le .com peut rester « anonyme » là où le .fr reconnaît la session.
+        local_host = _TERRITORY_HOST.get(cfg.get("musicTerritory") or "", MUSIC_BASE)
+        if local_host != MUSIC_BASE and not cfg.get("customerId"):
+            local_cfg = self._fetch_config(local_host)
+            if local_cfg.get("customerId") or local_cfg.get("accessToken"):
+                cfg, self._base = local_cfg, local_host
         if not cfg.get("accessToken"):
-            # Repli officieux du player : pandaToken (même origine, mêmes cookies).
-            try:
-                resp = self._session.get(
-                    f"{MUSIC_BASE}/pandaToken",
-                    params={"deviceType": cfg.get("deviceType", "")},
-                    headers={"Cookie": self.cookie, "Referer": f"{MUSIC_BASE}/"},
-                    timeout=20,
-                )
-                cfg["accessToken"] = (resp.json() or {}).get("accessToken", "")
-            except Exception:
-                cfg["accessToken"] = ""
+            cfg["accessToken"] = self._fetch_panda_token(cfg)
+        if not cfg.get("accessToken"):
+            cfg["accessToken"] = self._fetch_page_token()
         if not cfg.get("accessToken"):
             raise AmazonAuthError(
                 "Cookies Amazon expirés ou invalides (aucun accessToken obtenu). "
-                "Reconnecte-toi sur music.amazon.com et recolle un Cookie frais."
+                "Reconnecte-toi sur music.amazon.fr (ou .com) et recolle un "
+                "Cookie frais, en étant bien connecté."
             )
         self._cfg, self._cfg_at = cfg, time.time()
         return cfg
+
+    def _fetch_config(self, base: str) -> dict:
+        try:
+            resp = self._session.get(
+                f"{base}/config.json",
+                params={"skipToken": "false", "clientApplication": CLIENT_APPLICATION},
+                headers={"Cookie": self.cookie, "Accept": "application/json",
+                         "Referer": f"{base}/"},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise AmazonAuthError(f"Connexion à {base} impossible : {e}") from e
+
+    def _fetch_panda_token(self, cfg: dict) -> str:
+        # Repli officieux du player : pandaToken (même origine, mêmes cookies).
+        try:
+            resp = self._session.get(
+                f"{self._base}/pandaToken",
+                params={"deviceType": cfg.get("deviceType", "")},
+                headers={"Cookie": self.cookie, "Referer": f"{self._base}/"},
+                timeout=20,
+            )
+            return (resp.json() or {}).get("accessToken", "")
+        except Exception:
+            return ""
+
+    def _fetch_page_token(self) -> str:
+        # Dernier repli, celui du vrai player : l'accessToken est injecté dans
+        # le HTML (window.amznMusic.appConfig) quand la session est reconnue.
+        try:
+            resp = self._session.get(
+                f"{self._base}/", headers={"Cookie": self.cookie,
+                                           "Referer": f"{self._base}/"},
+                timeout=25,
+            )
+            m = re.search(r'accessToken["\']?\s*[:=]\s*["\']([A-Za-z0-9._-]{20,})',
+                          resp.text)
+            return m.group(1) if m else ""
+        except Exception:
+            return ""
 
     def account_info(self) -> dict:
         cfg = self.config(force=True)
@@ -446,7 +510,7 @@ class AmazonMusicClient:
             "x-amzn-device-time-zone": "UTC",
             "x-amzn-timestamp": str(int(time.time() * 1000)),
             "x-amzn-csrf": csrf,
-            "x-amzn-music-domain": "music.amazon.com",
+            "x-amzn-music-domain": self._base.split("//", 1)[-1],
             "x-amzn-referer": "",
             "x-amzn-affiliate-tags": "",
             "x-amzn-ref-marker": "",
@@ -463,7 +527,8 @@ class AmazonMusicClient:
     def search_tracks(self, query: str, limit: int = 20) -> list[dict]:
         self.config()
         prefix = _SEGMENT_SKILL_PREFIX.get(self.segment, "na")
-        page_url = f"{MUSIC_BASE}/search/{query}"
+        base = self.music_base
+        page_url = f"{base}/search/{query}"
         body = {
             "filter": json.dumps({"IsLibrary": ["false"]}),
             "keyword": json.dumps({
@@ -481,7 +546,7 @@ class AmazonMusicClient:
                 resp = self._session.post(
                     f"{host}/api/showSearch", data=json.dumps(body),
                     headers={"Content-Type": "text/plain;charset=UTF-8",
-                             "Origin": MUSIC_BASE, "Referer": f"{MUSIC_BASE}/"},
+                             "Origin": base, "Referer": f"{base}/"},
                     timeout=25,
                 )
                 if resp.status_code == 401:
@@ -527,7 +592,7 @@ class AmazonMusicClient:
     def _dmls(self, method: str, body: dict) -> dict:
         self.config()
         cfg = self._cfg
-        url = f"{MUSIC_BASE}/{self.segment}/api/dmls/{method}"
+        url = f"{self.music_base}/{self.segment}/api/dmls/{method}"
         payload = {
             "deviceToken": {
                 "deviceTypeId": cfg.get("deviceType", ""),

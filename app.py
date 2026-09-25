@@ -363,6 +363,12 @@ def _pywidevine_available() -> bool:
         return False
 
 
+def _amazon_proxy() -> str:
+    """Proxy réservé au trafic Amazon (exit VPN), via .env ou /admin."""
+    record = _load_json(AMAZON_FILE, {})
+    return (os.environ.get("AMAZON_PROXY") or record.get("proxy") or "").strip()
+
+
 def _amazon_client() -> AmazonMusicClient | None:
     """Client direct Amazon Music si un cookie de compte est configuré."""
     record = _load_json(AMAZON_FILE, {})
@@ -374,6 +380,7 @@ def _amazon_client() -> AmazonMusicClient | None:
         keys_path=AMAZON_KEYS_FILE,
         wvd_dir=AMAZON_WVD_DIR,
         log=lambda msg: print(f"[amazon] {msg}"),
+        proxy=_amazon_proxy(),
     )
 
 
@@ -385,6 +392,7 @@ def _amazon_status() -> dict:
         "from_env": bool(os.environ.get("AMAZON_COOKIE")) and not record.get("cookie"),
         "account": record.get("account") or {},
         "added_at": record.get("added_at"),
+        "proxy": _amazon_proxy(),
         "widevine": {
             "cdm_installed": _pywidevine_available(),
             "device_files": [f.name for f in wvd_files],
@@ -393,13 +401,14 @@ def _amazon_status() -> dict:
     }
 
 
-def _validate_amazon_cookie(cookie: str) -> dict:
+def _validate_amazon_cookie(cookie: str, proxy: str = "") -> dict:
     """Connecte le cookie auprès d'Amazon et renvoie l'état du compte.
 
     Lève AmazonAuthError/AmazonMusicError avec un message exploitable si le
     cookie est refusé — l'admin voit alors exactement quoi refaire.
     """
-    client = AmazonMusicClient(cookie, keys_path=AMAZON_KEYS_FILE, wvd_dir=AMAZON_WVD_DIR)
+    client = AmazonMusicClient(cookie, keys_path=AMAZON_KEYS_FILE, wvd_dir=AMAZON_WVD_DIR,
+                               proxy=proxy)
     info = client.account_info()
     benefits = info.get("benefits") or []
     unlimited = any("UNLIMITED" in str(b).upper() for b in benefits)
@@ -443,22 +452,25 @@ def amazon_status():
 @admin_required
 def admin_add_amazon():
     cookie = request.form.get("cookie", "").strip()
+    proxy = request.form.get("proxy", "").strip()
     if not cookie:
         flash("Cookie Amazon manquant", "error")
         return redirect(url_for("admin_dashboard"))
     try:
-        account = _validate_amazon_cookie(cookie)
+        account = _validate_amazon_cookie(cookie, proxy)
     except AmazonMusicError as e:
         flash(f"Cookie Amazon refusé : {e}", "error")
         return redirect(url_for("admin_dashboard"))
     with _data_lock:
         _save_json(AMAZON_FILE, {
             "cookie": cookie,
+            "proxy": proxy,
             "account": account,
             "added_at": datetime.utcnow().isoformat(),
         })
     benefits = ", ".join(account.get("benefits") or []) or "avantages inconnus"
-    flash(f"Compte Amazon Music connecté ({account.get('territory') or '?'}, {benefits})", "success")
+    via = f", via proxy {proxy}" if proxy else ""
+    flash(f"Compte Amazon Music connecté ({account.get('territory') or '?'}{via}, {benefits})", "success")
     return redirect(url_for("admin_dashboard"))
 
 
