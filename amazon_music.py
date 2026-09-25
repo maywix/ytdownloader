@@ -399,11 +399,18 @@ class AmazonMusicClient:
         if not cfg.get("accessToken"):
             cfg["accessToken"] = self._fetch_page_token()
         if not cfg.get("accessToken"):
-            raise AmazonAuthError(
-                "Cookies Amazon expirés ou invalides (aucun accessToken obtenu). "
-                "Reconnecte-toi sur music.amazon.fr (ou .com) et recolle un "
-                "Cookie frais, en étant bien connecté."
-            )
+            ip_seen = cfg.get("ipAddress") or "?"
+            if cfg.get("customerId"):
+                # Session reconnue mais pas de token : inhabituel, cookie à rafraîchir.
+                hint = "Cookie à recoller (session reconnue mais token absent)."
+            else:
+                hint = (
+                    "Amazon répond en mode anonyme depuis cette machine "
+                    f"(IP vue par Amazon : {ip_seen}) : soit le cookie est expiré, "
+                    "soit cette IP n'est pas acceptée — si le même cookie marche "
+                    "ailleurs, renseigne le proxy dans /admin."
+                )
+            raise AmazonAuthError(hint)
         self._cfg, self._cfg_at = cfg, time.time()
         return cfg
 
