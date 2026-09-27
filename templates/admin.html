@@ -92,7 +92,7 @@
             {% endif %}
           </div>
           <form method="post" action="/admin/amazon" class="admin-form">
-            <div class="input-row"><textarea name="cookie" placeholder="Cookie complet du navigateur sur music.amazon.com (F12 → Réseau → n'importe quelle requête → Cookie)" rows="3" autocomplete="off" required></textarea></div>
+            <div class="input-row"><textarea name="cookie" placeholder="Cookie complet du navigateur connecté sur TON player Amazon Music (music.amazon.fr pour la France) — F12 → Réseau → n'importe quelle requête → Cookie" rows="3" autocomplete="off" required></textarea></div>
             <div class="input-row"><input name="proxy" placeholder="Proxy réservé à Amazon, optionnel (ex : socks5h://host.docker.internal:1080 ou http://…)" autocomplete="off" value="{{ amazon.proxy or '' }}"></div>
             <button type="submit" class="dl-btn">Connecter le compte</button>
           </form>

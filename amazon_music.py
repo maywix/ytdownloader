@@ -4,29 +4,40 @@ Télécharge depuis TON compte Amazon Music Unlimited (cookies du web player),
 y compris les flux spatiaux Dolby Atmos (E-AC-3 JOC / AC-4), sans passer par
 une API tierce type zarz.moe : tout se joue entre ce serveur et Amazon.
 
-Protocole (reverse-engineering du web player music.amazon.com, vérifié le
-2026-09-25) :
+Protocole (reverse-engineering du web player music.amazon.*, re-vérifié le
+2026-09-27 après la refonte « web-hornet » / Expo du player) :
 
 1. Session : GET music.amazon.com/config.json?skipToken=false&clientApplication=skyfire
    avec les cookies du compte → accessToken (Bearer « panda »), customerId,
    deviceType du web player, sessionId, CSRF, marketplace/territoire.
-   (Repli : GET /pandaToken?deviceType=… si config ne renvoie pas de token.)
-2. Catalogue : POST {na|eu}.mesk.skill.music.a2z.com/api/showSearch
-   (mêmes en-têtes x-amzn-* que le player) → rangées de pistes avec ASIN.
-3. Manifestes : POST music.amazon.com/{NA|EU}/api/dmls/getDashManifestsV2
-   → URL de manifestes DASH (CloudFront .mpd) : AdaptationSets SD/HD/3D,
-   Representations opus/flac/ec-3/ac-4, protection Widevine CENC (pssh).
-4. Audio : segments CMAF par plages d'octets (Range) sur CloudFront,
-   URL signées valables ~1 h. Le flux est chiffré Widevine (CENC AES-CTR).
-5. Clé : POST …/api/dmls/getLicenseForPlaybackV2 avec le challenge d'un CDM
-   local (pywidevine + fichier .wvd fourni par l'utilisateur) → licence →
-   clé de contenu (mise en cache par KID dans data/amazon_keys.json).
+   ⚠ Amazon n'attache la session (customerId) que sur le host du marché du
+   compte (music.amazon.fr pour la France) : le marché se lit dans les noms
+   de cookies (at-acbfr = France, at-acbuk = UK…) et on y rejoue la config.
+2. Catalogue : POST gql.music.<marché>/ opération GraphQL « specificationSearch »
+   (SpecSearchPage) avec les en-têtes Firefly (x-api-key, device, territoire,
+   Authorization « AmznMusic » = base64 {access_token, deviceId, deviceType}
+   du token clientApplication=hornet). L'ancienne API showSearch sur
+   *.mesk.skill.music.a2z.com répond 500 (morte) même depuis le navigateur.
+3. Manifestes : POST music.amazon.<marché>/{NA|EU}/api/dmls/getDashManifestsV2
+   avec appInfo.musicAgent « Vinyl/2.0 hornet/<version> (…) » + customerInfo
+   {marketplaceId, territoryId} + SIREN_KATANA (+ contentProtectionList
+   TRACK_PSSH), à défaut [V1, V2] + bitrateTypeList. Le manifeste DASH revient
+   inline (XML) dans contentResponseList[*].manifest.
+4. Audio : segments CMAF sur CloudFront, URL signées valables ~1 h.
+   Flux chiffré Widevine CENC : la protection (pssh) est en bande dans le
+   segment d'init (moov/pssh), pas dans le MPD (TRACK_PSSH) — extraite ici.
+5. Clé : POST …/api/dmls/getLicenseForPlaybackV2 (customerId + deviceToken +
+   appInfo) avec le challenge d'un CDM local (pywidevine + fichier .wvd
+   fourni par l'utilisateur) → licence → clé de contenu (cache par KID dans
+   data/amazon_keys.json). Les titres « clear lead » sortent sans pssh :
+   aucune clé nécessaire.
 6. Décryptage/remux : ffmpeg -decryption_key (le même chemin que les
    extracteurs existants), FLAC → .flac, EC-3/AC-4 → .m4a tel quel.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import random
 import re
@@ -57,6 +68,46 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 MUSIC_BASE = "https://music.amazon.com"
 CLIENT_APPLICATION = "skyfire"
 
+# Client GraphQL du web player (« Firefly » / web-hornet). Depuis la refonte
+# Expo (constaté 2026-09-27), la recherche ne passe plus par showSearch sur
+# *.mesk.skill.music.a2z.com (mort, HTTP 500) mais par specificationSearch.
+FIREFLY_WEB_API_KEY = "amzn1.application.4ff5579ca2e3407aba989a1f5dbdaf69"
+_CLIENT_APPLICATION_HORNET = "hornet"
+
+# Document exact accepté par le backend TenzingTextSearchService (spécifications
+# avec label non nul obligatoire ; duration est un Float en secondes).
+_SEARCH_QUERY = """query SpecSearchPage($searchText: String!, $specifications: [SearchSpecification]) {
+  specificationSearch(specificationSearchInput: {searchText: $searchText, specifications: $specifications}) {
+    id
+    searchText
+    result {
+      __typename
+      label
+      edges {
+        __typename
+        node {
+          __typename
+          ... on Track {
+            id
+            title
+            shortTitle
+            duration
+            contributingArtists {
+              edges {
+                node {
+                  __typename
+                  ... on Artist { id name }
+                }
+              }
+            }
+            album { id title }
+          }
+        }
+      }
+    }
+  }
+}"""
+
 # Host local du web player par territoire : un compte FR est mieux servi
 # (config + token + dmls) par music.amazon.fr que par le .com US.
 _TERRITORY_HOST = {
@@ -76,7 +127,19 @@ _TERRITORY_SEGMENT = {
     "BE": "EU", "PT": "EU", "AT": "EU", "CH": "EU", "PL": "EU", "SE": "EU", "DK": "EU",
     "NO": "EU", "FI": "EU", "JP": "JP", "AU": "NA", "IN": "NA", "ZA": "EU",
 }
-_SEGMENT_SKILL_PREFIX = {"NA": "na", "EU": "eu", "JP": "jp", "LA": "na"}
+
+# Les noms de cookies trahissent le marché du compte : « at-acbfr » = France,
+# « at-acbuk » = Royaume-Uni, « at-acbfr-music », « at-main » = US… Constaté en
+# prod (2026-09-27) : Amazon n'attache la session (customerId) que sur le host
+# du marché du compte — music.amazon.com reste « anonyme » pour un compte FR
+# même avec le cookie exact du navigateur. Ces suffixes donnent le host à essayer.
+_COOKIE_MARKET_SUFFIX = {
+    "com": "US", "ca": "CA", "mx": "MX", "br": "BR",
+    "uk": "GB", "de": "DE", "fr": "FR", "it": "IT", "es": "ES", "nl": "NL",
+    "be": "BE", "pt": "PT", "at": "AT", "ch": "CH", "pl": "PL", "se": "SE",
+    "dk": "DK", "no": "NO", "fi": "FI", "ie": "IE", "za": "ZA",
+    "in": "IN", "jp": "JP", "au": "AU",
+}
 
 _ASIN_RE = re.compile(r"^B[0-9A-Z]{9}$")
 
@@ -177,6 +240,7 @@ class Representation:
     init_range: str = ""
     segments: list = field(default_factory=list)   # [(url, "start-end")]
     segment_headers: dict = field(default_factory=dict)
+    dash_version: str = ""     # SIREN_KATANA | V2… (info)
 
     @property
     def is_atmos(self) -> bool:
@@ -368,6 +432,8 @@ class AmazonMusicClient:
         self._base = MUSIC_BASE
         self._cfg: dict = {}
         self._cfg_at = 0.0
+        self._hornet_cfg: dict = {}
+        self._hornet_at = 0.0
 
     # ── Session / auth ──────────────────────────────────────────────────────
 
@@ -387,13 +453,17 @@ class AmazonMusicClient:
         if self._cfg and not force and time.time() - self._cfg_at < 600:
             return self._cfg
         cfg = self._fetch_config(MUSIC_BASE)
-        # Un compte FR/DE/… est servi par le host local de son marché :
-        # le .com peut rester « anonyme » là où le .fr reconnaît la session.
-        local_host = _TERRITORY_HOST.get(cfg.get("musicTerritory") or "", MUSIC_BASE)
-        if local_host != MUSIC_BASE and not cfg.get("customerId"):
-            local_cfg = self._fetch_config(local_host)
-            if local_cfg.get("customerId") or local_cfg.get("accessToken"):
-                cfg, self._base = local_cfg, local_host
+        # .com peut rester « anonyme » même avec un cookie valide : la session
+        # ne s'attache que sur le host du marché du compte (music.amazon.fr
+        # pour la France, …). Le marché se lit dans les noms de cookies
+        # (at-acbfr…) ou, à défaut, dans le musicTerritory de la 1ʳᵉ réponse.
+        for host in self._market_hosts(cfg):
+            if host == MUSIC_BASE:
+                continue
+            local_cfg = self._fetch_config(host)
+            if local_cfg.get("customerId"):
+                cfg, self._base = local_cfg, host
+                break
         if not cfg.get("accessToken"):
             cfg["accessToken"] = self._fetch_panda_token(cfg)
         if not cfg.get("accessToken"):
@@ -408,17 +478,37 @@ class AmazonMusicClient:
                     "Amazon répond en mode anonyme depuis cette machine "
                     f"(IP vue par Amazon : {ip_seen}) : soit le cookie est expiré, "
                     "soit cette IP n'est pas acceptée — si le même cookie marche "
-                    "ailleurs, renseigne le proxy dans /admin."
+                    "ailleurs, renseigne le proxy dans /admin. Recolle aussi le "
+                    "cookie depuis le player de TON marché (music.amazon.fr pour "
+                    "la France), pas depuis music.amazon.com."
                 )
             raise AmazonAuthError(hint)
         self._cfg, self._cfg_at = cfg, time.time()
         return cfg
 
-    def _fetch_config(self, base: str) -> dict:
+    def _market_hosts(self, first_cfg: dict) -> list[str]:
+        """Hosts du marché à essayer, déduits du cookie puis de la 1ʳᵉ config."""
+        codes: set[str] = set()
+        for pair in self.cookie.split(";"):
+            name = pair.split("=", 1)[0].strip()
+            m = re.search(r"-acb([a-z]{2,3})(?:$|-)", name)  # at-acbfr(-music)…
+            if m:
+                codes.add(m.group(1))
+        hosts: list[str] = []
+        for code in sorted(codes):
+            host = _TERRITORY_HOST.get(_COOKIE_MARKET_SUFFIX.get(code, ""))
+            if host and host not in hosts:
+                hosts.append(host)
+        territory_host = _TERRITORY_HOST.get(first_cfg.get("musicTerritory") or "")
+        if territory_host and territory_host not in hosts:
+            hosts.append(territory_host)
+        return hosts
+
+    def _fetch_config(self, base: str, client_application: str = CLIENT_APPLICATION) -> dict:
         try:
             resp = self._session.get(
                 f"{base}/config.json",
-                params={"skipToken": "false", "clientApplication": CLIENT_APPLICATION},
+                params={"skipToken": "false", "clientApplication": client_application},
                 headers={"Cookie": self.cookie, "Accept": "application/json",
                          "Referer": f"{base}/"},
                 timeout=20,
@@ -466,6 +556,77 @@ class AmazonMusicClient:
             "benefits": cfg.get("benefits") or [],
         }
 
+    def _hornet_config(self, force: bool = False) -> dict:
+        """Config du client « hornet » (token + device) pour le client GraphQL.
+
+        Le token panda est lié au clientApplication : celui du player actuel
+        est « hornet » (expire ~1 h), pas « skyfire ». Cache 10 min.
+        """
+        if self._hornet_cfg and not force and time.time() - self._hornet_at < 600:
+            return self._hornet_cfg
+        cfg = self._fetch_config(self.music_base, client_application=_CLIENT_APPLICATION_HORNET)
+        if not cfg.get("accessToken"):
+            raise AmazonAuthError("Token hornet absent (cookie à recoller).")
+        self._hornet_cfg, self._hornet_at = cfg, time.time()
+        return cfg
+
+    def _gql_headers(self) -> dict:
+        """En-têtes du client GraphQL Firefly (web-hornet).
+
+        L'autorisation « AmznMusic » encode {access_token, deviceId,
+        deviceType} en base64 — format décodé du middleware d'auth du bundle.
+        """
+        cfg = self._hornet_config()
+        auth_payload = json.dumps({
+            "access_token": cfg.get("accessToken", ""),
+            "deviceId": cfg.get("deviceId", ""),
+            "deviceType": cfg.get("deviceType", ""),
+        })
+        return {
+            "x-api-key": FIREFLY_WEB_API_KEY,
+            "x-amzn-device-id": cfg.get("deviceId", ""),
+            "x-amzn-device-type": cfg.get("deviceType", ""),
+            "music-territory": cfg.get("musicTerritory", ""),
+            "x-amzn-session-id": cfg.get("sessionId", ""),
+            "Authorization": "AmznMusic " + base64.b64encode(auth_payload.encode()).decode(),
+        }
+
+    def gql_request(self, query: str, variables: dict, operation_name: str) -> dict:
+        """Requête GraphQL sur gql.music.<marché> (recherche catalogue)."""
+        self.config()
+        gql_host = self.music_base.replace("music.", "gql.music.", 1)
+        payload = {"query": query, "variables": variables, "operationName": operation_name}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/graphql-response+json, application/json",
+            "Origin": self.music_base,
+            "Referer": f"{self.music_base}/",
+            **self._gql_headers(),
+        }
+        try:
+            resp = self._session.post(f"{gql_host}/", data=json.dumps(payload),
+                                      headers=headers, timeout=25)
+        except Exception as e:
+            raise AmazonMusicError(f"Recherche Amazon injoignable ({gql_host}) : {e}") from e
+        if resp.status_code in (401, 403):
+            # token hornet expiré : on rafraîchit et on retente une fois
+            self._hornet_config(force=True)
+            headers.update(self._gql_headers())
+            resp = self._session.post(f"{gql_host}/", data=json.dumps(payload),
+                                      headers=headers, timeout=25)
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise AmazonMusicError(
+                f"Recherche Amazon illisible (HTTP {resp.status_code}).") from e
+        errors = data.get("errors") or []
+        if errors:
+            detail = "; ".join(str(err.get("message") or
+                                err.get("extensions", {}).get("code") or "?")
+                               for err in errors[:2])
+            raise AmazonMusicError(f"Recherche Amazon refusée : {detail}")
+        return data.get("data") or {}
+
     # ── En-têtes communs ────────────────────────────────────────────────────
 
     def _csrf_headers(self) -> dict:
@@ -487,85 +648,56 @@ class AmazonMusicClient:
             "x-amzn-csrf": csrf,
         }
 
-    def _skill_headers(self, page_url: str) -> dict:
-        """En-têtes x-amzn-* du player, sérialisés dans le corps showSearch."""
-        cfg = self._cfg
-        auth = json.dumps({
-            "interface": "ClientAuthenticationInterface.v1_0.ClientTokenElement",
-            "accessToken": cfg.get("accessToken", ""),
-        })
-        csrf = json.dumps({
-            "interface": "CSRFInterface.v1_0.CSRFHeaderElement",
-            "token": cfg.get("csrf", {}).get("token", "") if isinstance(cfg.get("csrf"), dict) else "",
-            "timestamp": str(int(time.time())),
-            "rndNonce": str(random.randrange(2 ** 31)),
-        })
-        return json.dumps({
-            "x-amzn-authentication": auth,
-            "x-amzn-device-model": "Chrome",
-            "x-amzn-device-width": "1920",
-            "x-amzn-device-family": "WEB_WEBPLAYER_OREGON",
-            "x-amzn-device-id": cfg.get("deviceId", ""),
-            "x-amzn-user-agent": UA,
-            "x-amzn-session-id": cfg.get("sessionId", ""),
-            "x-amzn-device-height": "1080",
-            "x-amzn-request-id": f"{random.randrange(16 ** 8):08x}-{int(time.time() * 1000)}",
-            "x-amzn-device-language": cfg.get("displayLanguage", "en_US"),
-            "x-amzn-currency-of-preference": "USD",
-            "x-amzn-os-version": "1.0",
-            "x-amzn-application-version": cfg.get("version", ""),
-            "x-amzn-device-time-zone": "UTC",
-            "x-amzn-timestamp": str(int(time.time() * 1000)),
-            "x-amzn-csrf": csrf,
-            "x-amzn-music-domain": self._base.split("//", 1)[-1],
-            "x-amzn-referer": "",
-            "x-amzn-affiliate-tags": "",
-            "x-amzn-ref-marker": "",
-            "x-amzn-page-url": page_url,
-            "x-amzn-weblab-id-overrides": "",
-            "x-amzn-video-player-token": "",
-            "x-amzn-feature-flags": "",
-            "x-amzn-has-profile-id": "",
-            "x-amzn-age-band": "",
-        })
-
     # ── Catalogue (recherche de l'ASIN) ─────────────────────────────────────
 
     def search_tracks(self, query: str, limit: int = 20) -> list[dict]:
-        self.config()
-        prefix = _SEGMENT_SKILL_PREFIX.get(self.segment, "na")
-        base = self.music_base
-        page_url = f"{base}/search/{query}"
-        body = {
-            "filter": json.dumps({"IsLibrary": ["false"]}),
-            "keyword": json.dumps({
-                "interface": "Web.TemplatesInterface.v1_0.Touch.SearchTemplateInterface.SearchKeywordClientInformation",
-                "keyword": query,
-            }),
-            "suggestedKeyword": query,
-            "userHash": json.dumps({"level": "LIBRARY_MEMBER"}),
-            "headers": self._skill_headers(page_url),
-        }
-        last_error = ""
-        for host in (f"https://{prefix}.mesk.skill.music.a2z.com",
-                     f"https://{prefix}.web.skill.music.a2z.com"):
-            try:
-                resp = self._session.post(
-                    f"{host}/api/showSearch", data=json.dumps(body),
-                    headers={"Content-Type": "text/plain;charset=UTF-8",
-                             "Origin": base, "Referer": f"{base}/"},
-                    timeout=25,
-                )
-                if resp.status_code == 401:
-                    self.config(force=True)
+        """Recherche catalogue via specificationSearch (client GraphQL hornet).
+
+        L'ancienne API showSearch (mesk.skill.music.a2z.com) est morte depuis
+        la refonte du web player : elle répond 500, même depuis un navigateur
+        connecté.
+        """
+        data = self.gql_request(
+            _SEARCH_QUERY,
+            {"searchText": query,
+             "specifications": [{"label": "Titres", "types": ["track"],
+                                 "limit": max(1, min(int(limit), 50))}]},
+            "SpecSearchPage",
+        )
+        results = ((data.get("specificationSearch") or {}).get("result") or [])
+        tracks: list[dict] = []
+        seen: set[str] = set()
+        for group in results:
+            for edge in (group.get("edges") or []):
+                node = edge.get("node") or {}
+                if node.get("__typename") != "Track":
                     continue
-                if resp.status_code != 200:
-                    last_error = f"{host} → HTTP {resp.status_code}"
+                asin = normalize_asin(node.get("id"))
+                title = str(node.get("title") or node.get("shortTitle") or "")
+                if not asin or not title or asin in seen:
                     continue
-                return _parse_search_rows(resp.json(), limit)
-            except Exception as e:
-                last_error = f"{host} → {e}"
-        raise AmazonMusicError(f"Recherche Amazon impossible ({last_error}).")
+                seen.add(asin)
+                artists = []
+                for artist_edge in ((node.get("contributingArtists") or {}).get("edges") or []):
+                    artist_node = artist_edge.get("node") or {}
+                    if artist_node.get("name"):
+                        artists.append(str(artist_node["name"]))
+                try:
+                    duration = int(float(node.get("duration") or 0))
+                except (TypeError, ValueError):
+                    duration = 0
+                album = node.get("album") or {}
+                tracks.append({
+                    "asin": asin,
+                    "album_asin": normalize_asin(album.get("id")),
+                    "title": re.sub(r"\s*\[explicit\]\s*$", "", title, flags=re.I),
+                    "artist": ", ".join(artists),
+                    "duration_seconds": duration,
+                    "cover": "",
+                })
+                if len(tracks) >= limit:
+                    return tracks
+        return tracks
 
     def match_track(self, title: str, artist: str, duration_seconds: int | None) -> dict | None:
         """Cherche la meilleure piste Amazon (durée puis titre/artiste)."""
@@ -640,38 +772,95 @@ class AmazonMusicClient:
         except ValueError as e:
             raise AmazonMusicError(f"Réponse illisible d'Amazon ({method}).") from e
 
-    def representations(self, asin: str) -> list[Representation]:
-        data = self._dmls("getDashManifestsV2", {
+    def _music_agent(self) -> str:
+        """Agent attendu par dmls : « Vinyl/2.0 <app>/<version> (<uuid-maison>) ».
+
+        (Format constaté dans le bundle web-hornet ; une UA Mozilla y est
+        refusée avec EC_INVALID_PARAMETER depuis 2026-09. La version est celle
+        du bundle player — la version de config (1.0.11376.0, 4 segments) fait
+        parfois répondre un 500 « authentication failure ». )
+        """
+        h = lambda: f"{random.randrange(16 ** 8):08x}"  # noqa: E731
+        app = "hornet"
+        version = "1.181.33"
+        return f"Vinyl/2.0 {app}/{version} ({h()}-{h()}-{app[:4]}-{h()}-{h()}{random.randrange(16):x})"
+
+    def _manifests(self, asin: str) -> list[tuple[str, str]]:
+        """[(manifeste, musicDashVersion)] — XML inline ou URL .mpd.
+
+        Protocole 2026-09 : body avec appInfo.musicAgent « Vinyl/2.0 »,
+        customerInfo {marketplaceId, territoryId} et soit SIREN_KATANA
+        (+ contentProtectionList TRACK_PSSH), soit l'ancien couple
+        musicDashVersionList [V1, V2] + bitrateTypeList. Le manifeste revient
+        inline (XML) dans contentResponseList[*].manifest (parfois une URL).
+        """
+        self.config()  # indispensable : le body est construit depuis self._cfg
+        base = {
+            "appInfo": {"musicAgent": self._music_agent()},
+            "customerId": self._cfg.get("customerId", ""),
+            "customerInfo": {
+                "marketplaceId": self._cfg.get("marketplaceId", ""),
+                "territoryId": self._cfg.get("musicTerritory", ""),
+            },
             "contentIdList": [{"identifier": asin, "identifierType": "ASIN"}],
-            "bitrateTypeList": ["LOW", "MEDIUM", "HIGH"],
-            "musicDashVersionList": ["V1", "V2"],
-            "appInfo": {"musicAgent": UA},
-        })
-        manifest_urls: list[tuple[str, dict]] = []
-        for node in _walk(data):
-            for key, value in node.items():
-                if isinstance(value, str) and "http" in value and ".mpd" in value.lower():
-                    headers = {}
-                    for hkey, hval in node.items():
-                        if isinstance(hval, dict):
-                            headers.update({str(k): str(v) for k, v in hval.items()})
-                    manifest_urls.append((value, headers))
-        if not manifest_urls:
+            "deviceToken": {
+                "deviceTypeId": self._cfg.get("deviceType", ""),
+                "deviceId": self._cfg.get("deviceId", ""),
+            },
+        }
+        variants = [
+            {"musicDashVersionList": ["SIREN_KATANA"],
+             "contentProtectionList": ["TRACK_PSSH"], "tryAsinSubstitution": True},
+            {"musicDashVersionList": ["V1", "V2"],
+             "bitrateTypeList": ["LOW", "MEDIUM", "HIGH"]},
+        ]
+        found: list[tuple[str, str]] = []
+        for extra in variants:
+            version = (extra.get("musicDashVersionList") or [""])[0]
+            for attempt in range(3):
+                try:
+                    data = self._dmls("getDashManifestsV2", {**base, **extra})
+                except AmazonMusicError as e:
+                    # dmls répond parfois de façon transitoire (400/500) :
+                    # on retente la même variante avant de passer à la suivante.
+                    self._log(f"getDashManifestsV2 {version} essai {attempt + 1} : {e}")
+                    time.sleep(1.0 + attempt)
+                    continue
+                for node in _walk(data):
+                    for key, value in node.items():
+                        if isinstance(value, str) and (
+                            ".mpd" in value.lower()
+                            or value.lstrip().startswith("<?xml")
+                            or "<MPD" in value[:200]
+                        ):
+                            found.append((value, version))
+                if found:
+                    return found
+        return found
+
+    def representations(self, asin: str) -> list[Representation]:
+        manifest_sources = self._manifests(asin)
+        if not manifest_sources:
             raise AmazonMusicError(
                 "Amazon n'a pas renvoyé de manifeste pour ce titre "
                 "(titre indisponible sur ton compte ou dans ton pays)."
             )
         reps: list[Representation] = []
         errors = []
-        for mpd_url, seg_headers in manifest_urls[:4]:
+        for manifest, dash_version in manifest_sources[:4]:
             try:
-                resp = self._session.get(mpd_url, headers={"User-Agent": UA, **seg_headers}, timeout=30)
-                if resp.status_code != 200:
-                    errors.append(f"HTTP {resp.status_code}")
-                    continue
-                for rep in parse_mpd(resp.text, mpd_url):
-                    rep.segment_headers = seg_headers
-                    reps.append(rep)
+                if manifest.lstrip().startswith("<?xml") or "<MPD" in manifest[:200]:
+                    mpd_text, seg_headers = manifest, {}
+                else:
+                    resp = self._session.get(manifest, headers={"User-Agent": UA}, timeout=30)
+                    if resp.status_code != 200:
+                        errors.append(f"HTTP {resp.status_code}")
+                        continue
+                    mpd_text = resp.text
+                parsed = parse_mpd(mpd_text, manifest if "://" in manifest else f"inline://{dash_version}")
+                for rep in parsed:
+                    rep.dash_version = dash_version
+                reps.extend(parsed)
             except AmazonMusicError as e:
                 errors.append(str(e))
         if not reps:
@@ -708,12 +897,68 @@ class AmazonMusicClient:
             return False
         return bool(self._wvd_files())
 
+    def _pssh_from_init(self, rep: Representation) -> str:
+        """Récupère la boîte pssh Widevine dans le segment d'init.
+
+        Avec contentProtectionList TRACK_PSSH (SIREN_KATANA), le MPD ne porte
+        pas la protection : elle est en bande dans l'init (moov/pssh).
+        Une plage de 64 Ko suffit (ftyp+moov en tête de fichier).
+        """
+        if not rep.init_url and not rep.base_url:
+            return ""
+        url = rep.init_url or rep.base_url
+        rng = rep.init_range if (rep.init_url and rep.init_range and "-" in rep.init_range) else "0-65535"
+        try:
+            resp = self._session.get(
+                url, headers={"User-Agent": UA, **(rep.segment_headers or {}),
+                              "Range": f"bytes={rng}"}, timeout=20)
+            data = resp.content
+        except Exception:
+            return ""
+        # scan des boîtes mp4 de tête jusqu'à trouver pssh (systemId Widevine)
+        offset = 0
+        while offset + 8 <= len(data):
+            try:
+                size = int.from_bytes(data[offset:offset + 4], "big")
+                typ = data[offset + 4:offset + 8].decode("latin1")
+            except Exception:
+                return ""
+            if size < 8:
+                return ""
+            if typ == "pssh":
+                import base64 as _b64
+                return _b64.b64encode(data[offset:offset + size]).decode()
+            if typ == "moov":
+                # cherche pssh dans les enfants du moov
+                inner = offset + 8
+                moov_end = min(offset + size, len(data))
+                while inner + 8 <= moov_end:
+                    isize = int.from_bytes(data[inner:inner + 4], "big")
+                    ityp = data[inner + 4:inner + 8].decode("latin1")
+                    if isize < 8:
+                        break
+                    if ityp == "pssh":
+                        import base64 as _b64
+                        return _b64.b64encode(data[inner:inner + isize]).decode()
+                    inner += isize
+                return ""
+            offset += size
+            if typ == "moof":  # le moov est derrière nous : trop tard
+                return ""
+        return ""
+
     def content_key(self, rep: Representation) -> str:
-        """Clé CENC (hex) pour une représentation, via CDM local + cache."""
+        """Clé CENC (hex) pour une représentation, via CDM local + cache.
+
+        Une chaîne vide = flux en clair (clear lead, pas de Widevine) :
+        beaucoup de titres du catalogue sortent désormais non chiffrés.
+        """
         if not rep.pssh and not rep.kid:
-            raise AmazonMusicError(
-                "Flux Amazon non chiffré inattendu (aucune protection Widevine trouvée)."
-            )
+            # TRACK_PSSH : la protection vitre dans l'init, pas dans le MPD.
+            rep.pssh = self._pssh_from_init(rep)
+        if not rep.pssh and not rep.kid:
+            # Toujours rien = flux réellement en clair (clear lead).
+            return ""
         cache = self._key_cache()
         if rep.kid and cache.get(rep.kid):
             return cache[rep.kid]
@@ -768,6 +1013,12 @@ class AmazonMusicClient:
         data = self._dmls("getLicenseForPlaybackV2", {
             "DrmType": "WIDEVINE",
             "licenseChallenge": base64.b64encode(challenge).decode(),
+            "customerId": self._cfg.get("customerId", ""),
+            "deviceToken": {
+                "deviceTypeId": self._cfg.get("deviceType", ""),
+                "deviceId": self._cfg.get("deviceId", ""),
+            },
+            "appInfo": {"musicAgent": self._music_agent()},
         })
         for node in _walk(data):
             for key, value in node.items():
@@ -870,70 +1121,3 @@ def ffmpeg_error(stderr: str, rep: Representation) -> str:
         f"ffmpeg n'a pas pu traiter le flux Amazon {rep.codec} : {detail}. "
         "Vérifie que ffmpeg est à jour (CENC AES-CTR requis)."
     )
-
-
-# ─────────────────────────────── Parsing recherche ─────────────────────────────
-
-_ROW_INTERFACE = "Web.TemplatesInterface.v1_0.Touch.WidgetsInterface.DescriptiveRowItemElement"
-_VISUAL_INTERFACE = "Web.TemplatesInterface.v1_0.Touch.WidgetsInterface.VisualRowItemElement"
-
-
-def _text_value(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        return str(value.get("text") or value.get("defaultValue") or "")
-    return str(value)
-
-
-def _parse_search_rows(data, limit: int) -> list[dict]:
-    tracks: list[dict] = []
-    seen: set[str] = set()
-
-    def row_to_track(row: dict) -> dict | None:
-        title = _text_value(row.get("primaryText"))
-        deeplink = ((row.get("primaryTextLink") or {}).get("deeplink")
-                    or (row.get("primaryLink") or {}).get("deeplink") or "")
-        track_id, album_id = extract_asin_from_url(deeplink)
-        if not track_id or not title:
-            return None
-        duration = parse_duration_mmss(_text_value(row.get("secondaryText3")))
-        cover = _clean_cover_url(str(row.get("image") or ""))
-        return {
-            "asin": track_id,
-            "album_asin": album_id,
-            "title": re.sub(r"\s*\[explicit\]\s*$", "", title, flags=re.I),
-            "artist": (_text_value(row.get("secondaryText1"))
-                       or _text_value(row.get("secondaryText2"))
-                       or _text_value(row.get("secondaryText"))),
-            "duration_seconds": duration,
-            "cover": cover,
-        }
-
-    for row in _iter_interface(data, _ROW_INTERFACE) + _iter_interface(data, _VISUAL_INTERFACE):
-        track = row_to_track(row)
-        if track and track["asin"] not in seen:
-            seen.add(track["asin"])
-            tracks.append(track)
-        if len(tracks) >= limit:
-            break
-    return tracks
-
-
-def _iter_interface(data, interface: str) -> list[dict]:
-    found: list[dict] = []
-
-    def walk(node):
-        if isinstance(node, dict):
-            if node.get("interface") == interface:
-                found.append(node)
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(data)
-    return found
