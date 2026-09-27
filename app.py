@@ -3,6 +3,7 @@ import io
 import importlib.metadata
 import json
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -19,7 +20,7 @@ from pathlib import Path
 import requests
 from flask import (
     Flask, render_template, request, jsonify, send_file, Response,
-    after_this_request, session, redirect, url_for, flash,
+    session, redirect, url_for, flash,
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 import yt_dlp
@@ -2018,6 +2019,115 @@ def cancel_download(download_id):
     return jsonify({"status": "cancelling"})
 
 
+# ── Service des fichiers terminés ────────────────────────────────────────────
+# Un fichier servi n'est plus détruit à la volée (avant, rmtree + pop avaient
+# lieu avant même que la réponse parte : si la connexion lâchait en plein
+# transfert, le DL était perdu sans recours). Il reste disponible
+# FILE_RETRY_WINDOW après le DERNIER envoi, le temps de recliquer
+# « Sauver » / « .zip ». Passé ce délai, un timer supprime fichiers + état.
+
+FILE_RETRY_WINDOW = 300  # secondes
+_ZIP_ABORT = object()  # sentinelle « zip interrompu » vers le générateur
+
+
+def _schedule_download_cleanup(download_id: str, delay: float) -> None:
+    """Programme la suppression d'un téléchargement déjà servi. Si le fichier
+    a été re-servi entre-temps (retry), served_at est plus récent : on
+    re-programme au lieu de supprimer pendant la fenêtre de retry."""
+    def _sweep():
+        state = downloads.get(download_id)
+        if state is None:
+            return
+        remaining = delay - (time.time() - state.get("_served_at", 0))
+        if remaining > 0:
+            _schedule_download_cleanup(download_id, remaining)
+            return
+        downloads.pop(download_id, None)
+        _cleanup_download_artifacts(download_id)
+
+    timer = threading.Timer(delay, _sweep)
+    timer.daemon = True
+    timer.start()
+
+
+class _QueueWriter(io.RawIOBase):
+    """File-like non adressable branché sur une queue bornée : zipfile écrit
+    dedans, le générateur de la Response relit. Queue pleine = écriture en
+    attente (backpressure) → mémoire constante même pour un gros album ; si
+    le client part, l'event stop débloque le thread de construction."""
+
+    def __init__(self, chunks: "queue.Queue", stop: threading.Event):
+        self._chunks = chunks
+        self._stop = stop
+
+    def writable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+    def write(self, b) -> int:
+        while not self._stop.is_set():
+            try:
+                self._chunks.put(bytes(b), timeout=0.5)
+                return len(b)
+            except queue.Full:
+                continue
+        raise OSError("client déconnecté")
+
+
+def _zip_streaming_response(folder: Path, zip_name: str) -> Response:
+    """Zippe `folder` à la volée vers la réponse. ZIP_STORED : FLAC/MP3 sont
+    déjà compressés, les déflater ne gagne quasi rien et brûle du CPU. Fini
+    le BytesIO géant (l'album entier, puis buf.read() une 2e fois : ~2× la
+    taille en RAM) qui pouvait faire tuer le process par l'OOM — et donc
+    mourir toutes les connexions d'un coup (« Failed to fetch ») pendant que
+    Docker redémarrait le conteneur."""
+    chunks: "queue.Queue" = queue.Queue(maxsize=64)
+    stop = threading.Event()
+
+    def build():
+        error = False
+        try:
+            with zipfile.ZipFile(_QueueWriter(chunks, stop), "w", zipfile.ZIP_STORED) as zf:
+                # SpotiFLAC may nest tracks inside artist/album folders.  The old
+                # top-level-only loop created an empty ZIP in that valid case.
+                for f in sorted(folder.rglob("*")):
+                    if f.is_file():
+                        zf.write(f, f.relative_to(folder))
+        except Exception:
+            error = True
+        finally:
+            try:
+                chunks.put(_ZIP_ABORT if error else None, timeout=1)
+            except queue.Full:
+                pass
+
+    def generate():
+        try:
+            while True:
+                chunk = chunks.get()
+                if chunk is None:
+                    return
+                if chunk is _ZIP_ABORT:
+                    # Coupe la réponse en plein milieu → le navigateur voit
+                    # une erreur réseau (fetch rejeté) au lieu d'un zip
+                    # tronqué ressemblant à un téléchargement valide.
+                    raise RuntimeError("zip interrompu côté serveur")
+                yield chunk
+        finally:
+            stop.set()
+
+    threading.Thread(target=build, daemon=True).start()
+    return Response(
+        generate(),
+        headers={
+            "Content-Disposition": f'attachment; filename="{zip_name}"',
+            "Content-Type": "application/zip",
+        },
+    )
+
+
 @app.route("/api/file/<download_id>")
 def serve_file(download_id):
     d = downloads.get(download_id)
@@ -2030,34 +2140,12 @@ def serve_file(download_id):
     if not filepath.exists():
         return jsonify({"error": "Fichier introuvable"}), 404
 
-    if d.get("is_playlist"):
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            # SpotiFLAC may nest tracks inside artist/album folders.  The old
-            # top-level-only loop created an empty ZIP in that valid case.
-            for f in sorted(filepath.rglob("*")):
-                if f.is_file():
-                    zf.write(f, f.relative_to(filepath))
-        buf.seek(0)
-        shutil.rmtree(filepath, ignore_errors=True)
-        downloads.pop(download_id, None)
-        zip_name = f"{_clean(d.get('filename', 'album'))}.zip"
-        return Response(
-            buf.read(),
-            headers={
-                "Content-Disposition": f'attachment; filename="{zip_name}"',
-                "Content-Type": "application/zip",
-            },
-        )
+    d["_served_at"] = time.time()
+    _schedule_download_cleanup(download_id, FILE_RETRY_WINDOW)
 
-    @after_this_request
-    def cleanup(response):
-        try:
-            filepath.unlink(missing_ok=True)
-            downloads.pop(download_id, None)
-        except Exception:
-            pass
-        return response
+    if d.get("is_playlist"):
+        zip_name = f"{_clean(d.get('filename', 'album'))}.zip"
+        return _zip_streaming_response(filepath, zip_name)
 
     return send_file(filepath, as_attachment=True, download_name=d["filename"])
 

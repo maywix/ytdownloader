@@ -502,12 +502,11 @@ document.addEventListener('DOMContentLoaded', () => {
     saveLink.textContent = isPlaylist ? 'Télécharger (.zip)' : 'Sauvegarder';
     saveLink.classList.remove('loading');
 
-    // Le zip est assemblé côté serveur avant le premier octet de réponse :
-    // une navigation <a href> classique laisse la page muette pendant ce
-    // temps. On passe par fetch()+blob pour afficher un spinner pendant
-    // l'attente. Pour un fichier unique déjà sur disque (send_file, pas
-    // d'attente notable), on garde la navigation native (streaming, pas de
-    // blob géant en mémoire).
+    // Le zip est streamé côté serveur (premier octet quasi immédiat), mais
+    // fetch()+blob permet d'afficher un spinner pendant que le navigateur
+    // met le fichier en mémoire. Pour un fichier unique déjà sur disque
+    // (send_file, pas d'attente notable), on garde la navigation native
+    // (streaming, pas de blob géant en mémoire).
     if (isPlaylist) {
       saveLink.removeAttribute('href');
       saveLink.onclick = (e) => { e.preventDefault(); downloadZipWithSpinner(saveLink, id, filename); };
@@ -525,6 +524,7 @@ document.addEventListener('DOMContentLoaded', () => {
     link.innerHTML = '<span class="spinner"></span> Préparation du zip...';
     try {
       const res = await fetch(`/api/file/${id}`);
+      if (res.status === 404) throw new Error('Fichier expiré côté serveur — relance le téléchargement');
       if (!res.ok) throw new Error('Échec de la récupération du fichier');
       const blob = await res.blob();
       const cd = res.headers.get('Content-Disposition') || '';
@@ -539,8 +539,14 @@ document.addEventListener('DOMContentLoaded', () => {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
       link.textContent = originalLabel;
-    } catch {
-      showError('Impossible de récupérer le fichier');
+    } catch (e) {
+      // « Failed to fetch » = TypeError natif du navigateur : la connexion
+      // est morte. Le serveur garde le fichier 5 min après le dernier envoi,
+      // recliquer le bouton retente donc le transfert.
+      const msg = (e && e.message) || '';
+      showError(/failed to fetch|load failed|networkerror/i.test(msg)
+        ? 'Connexion au serveur perdue — vérifie que l’app tourne, puis réessaie'
+        : (msg || 'Impossible de récupérer le fichier'));
       link.textContent = originalLabel;
     } finally {
       link.classList.remove('loading');

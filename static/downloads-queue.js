@@ -53,11 +53,11 @@
   function triggerSave(entry) {
     if (!entry.downloadId || entry.saved) return;
     if (entry.isPlaylist) {
-      // Le zip est assemblé côté serveur avant le premier octet de réponse :
-      // on passe par fetch()+blob pour pouvoir afficher "Préparation..."
-      // pendant cette attente (une simple navigation <a href> resterait
-      // muette). Fichier unique déjà sur disque : navigation native
-      // (streaming direct, pas de blob géant à garder en mémoire).
+      // Zip streamé côté serveur, mais fetch()+blob garde le témoin
+      // "Préparation..." pendant que le navigateur le met en mémoire (une
+      // navigation <a href> resterait muette jusqu'à l'enregistrement).
+      // Fichier unique déjà sur disque : navigation native (streaming
+      // direct, pas de blob géant à garder en mémoire).
       saveViaBlob(entry);
       return;
     }
@@ -78,6 +78,7 @@
     render();
     try {
       const res = await fetch(`/api/file/${entry.downloadId}`);
+      if (res.status === 404) throw new Error('Fichier expiré côté serveur — relance le téléchargement');
       if (!res.ok) throw new Error('Échec de la récupération du fichier');
       const blob = await res.blob();
       const cd = res.headers.get('Content-Disposition') || '';
@@ -94,7 +95,9 @@
       setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
       entry.saved = true;
     } catch (e) {
-      entry.saveError = e.message || 'Erreur lors de la préparation du fichier';
+      // Le serveur garde le fichier 5 min après le dernier envoi : le
+      // bouton « Sauver » reste cliquable pour retenter un transfert raté.
+      entry.saveError = friendlyError(e.message);
     } finally {
       entry.preparing = false;
       persist();
@@ -140,9 +143,20 @@
     poll(entry);
   }
 
+  // « Failed to fetch » (Chrome) / « Load failed » (Safari) = TypeError natif
+  // du navigateur : la connexion au serveur est morte (serveur éteint, réseau
+  // coupé, machine en veille, délai dépassé). On traduit en message
+  // actionnable au lieu d'afficher l'anglais brut.
+  function friendlyError(message) {
+    if (/failed to fetch|load failed|networkerror|network error/i.test(message || '')) {
+      return 'Connexion au serveur perdue — vérifie que l’app tourne, puis réessaie';
+    }
+    return message || 'Erreur';
+  }
+
   function fail(entry, message) {
     entry.status = 'error';
-    entry.error = message || 'Erreur';
+    entry.error = friendlyError(message);
     persist();
     render();
   }
