@@ -670,8 +670,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Lien venu d'ailleurs (ex: redirigé depuis YTDown) ──
   const paramUrl = new URLSearchParams(window.location.search).get('url');
 
-  // ── Recherche restaurée uniquement lors d'un retour arrière du navigateur
-  // (pas sur un simple rechargement ni une arrivée directe sur la page) ──
+  // Restaure la recherche associée à l'étape courante de l'historique.
   function restoreSearchState(state = YTPersist.load(STATE_KEY)) {
     if (!state || !state.results) return;
 
@@ -764,8 +763,12 @@ document.addEventListener('DOMContentLoaded', () => {
   restorePrefs();
   if (!paramUrl) restoreSearchState();
   if (navigation.current().view === 'home' && !paramUrl) {
+    const savedSearch = YTPersist.load(STATE_KEY);
     const savedCard = YTPersist.load(CARD_KEY);
     const savedDownload = YTPersist.load(DOWNLOAD_KEY);
+    if (savedSearch?.results && (!savedCard || savedCard.origin)) {
+      navigation.push('search', { search: savedSearch });
+    }
     if (savedCard) navigation.push('detail', { card: savedCard });
     if (savedDownload?.downloadId) navigation.push('progress', savedDownload);
   }

@@ -722,8 +722,7 @@ document.addEventListener('DOMContentLoaded', () => {
     musicBtnSpinner.classList.toggle('hidden', !on);
   }
 
-  // ── Recherche restaurée uniquement lors d'un retour arrière du navigateur
-  // (pas sur un simple rechargement ni une arrivée directe sur la page) ──
+  // Restaure la recherche associée à l'étape courante de l'historique.
   function restoreSearchState(state = YTPersist.load(STATE_KEY)) {
     if (!state || !state.results) return;
 
@@ -780,6 +779,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const savedCard = YTPersist.load(CARD_KEY);
   const savedDownload = YTPersist.load(DOWNLOAD_KEY);
   if (navigation.current().view === 'home') {
+    const savedSearch = YTPersist.load(STATE_KEY);
+    if (savedSearch?.results && (!savedCard || savedCard.origin)) {
+      navigation.push('search', { search: savedSearch });
+    }
     if (savedCard) navigation.push('detail', { card: savedCard });
     if (savedDownload?.downloadId) navigation.push('progress', savedDownload);
   }
