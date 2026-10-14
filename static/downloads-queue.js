@@ -26,11 +26,16 @@
 
   let items = load();
   const timers = {};
+  const renderedProgress = new Map();
 
   function uid() { return 'q' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
   function activeCount() {
     return items.filter((e) => e.status === 'pending' || e.status === 'downloading').length;
+  }
+
+  function problemCount() {
+    return items.filter((e) => e.status === 'error' || (!e.saved && (e.saveError || e.qualityMismatch))).length;
   }
 
   function add({ service, title, subtitle, thumbnail, autoSave }) {
@@ -253,6 +258,7 @@
     const entry = items.find((e) => e.id === id);
     if (entry) stop(entry);
     items = items.filter((e) => e.id !== id);
+    renderedProgress.delete(id);
     persist();
     render();
   }
@@ -260,6 +266,9 @@
   function clearFinished() {
     items.filter((e) => e.status === 'done' || e.status === 'error' || e.status === 'cancelled').forEach(stop);
     items = items.filter((e) => e.status !== 'done' && e.status !== 'error' && e.status !== 'cancelled');
+    for (const id of renderedProgress.keys()) {
+      if (!items.some((entry) => entry.id === id)) renderedProgress.delete(id);
+    }
     persist();
     render();
   }
@@ -278,7 +287,7 @@
   const ICON_CLOSE = svg('<path d="M18 6L6 18M6 6l12 12"/>', 12);
 
   function ensureUI() {
-    const host = document.querySelector('.header-actions');
+    const host = document.querySelector('.header-actions') || document.querySelector('.home-topbar');
     if (!host || btnEl) return;
 
     const wrap = document.createElement('div');
@@ -290,15 +299,22 @@
     btnEl.className = 'dlq-btn';
     btnEl.setAttribute('aria-haspopup', 'true');
     btnEl.setAttribute('aria-expanded', 'false');
-    btnEl.title = 'Téléchargements';
-    btnEl.innerHTML = ICON_DL + '<span class="dlq-badge hidden" id="dlq-badge">0</span>';
+    btnEl.setAttribute('aria-controls', 'dlq-panel');
+    btnEl.title = 'Ouvrir la file d’attente';
+    btnEl.innerHTML = ICON_DL + '<span class="dlq-btn-label">File d’attente</span><span class="dlq-badge hidden" id="dlq-badge">0</span>';
 
     panelEl = document.createElement('div');
+    panelEl.id = 'dlq-panel';
     panelEl.className = 'dlq-panel hidden';
+    panelEl.setAttribute('role', 'region');
+    panelEl.setAttribute('aria-label', 'File d’attente des téléchargements');
     panelEl.innerHTML = `
       <div class="dlq-panel-head">
-        <span>Téléchargements</span>
-        <button type="button" class="mini-btn" id="dlq-clear">Effacer terminés</button>
+        <span>File d’attente</span>
+        <div class="dlq-head-actions">
+          <button type="button" class="mini-btn" id="dlq-clear">Effacer l’historique</button>
+          <button type="button" class="dlq-panel-close" id="dlq-close" aria-label="Fermer la file d’attente">×</button>
+        </div>
       </div>
       <div class="dlq-list" id="dlq-list"></div>
     `;
@@ -308,6 +324,11 @@
     listEl = panelEl.querySelector('#dlq-list');
     badgeEl = btnEl.querySelector('#dlq-badge');
 
+    const closePanel = () => {
+      panelEl.classList.add('hidden');
+      btnEl.setAttribute('aria-expanded', 'false');
+    };
+
     btnEl.addEventListener('click', (event) => {
       event.stopPropagation();
       const willOpen = panelEl.classList.contains('hidden');
@@ -315,15 +336,13 @@
       btnEl.setAttribute('aria-expanded', String(willOpen));
     });
     document.addEventListener('click', (event) => {
-      if (!wrap.contains(event.target)) {
-        panelEl.classList.add('hidden');
-        btnEl.setAttribute('aria-expanded', 'false');
-      }
+      if (!wrap.contains(event.target)) closePanel();
     });
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') { panelEl.classList.add('hidden'); btnEl.setAttribute('aria-expanded', 'false'); }
+      if (event.key === 'Escape') closePanel();
     });
     panelEl.querySelector('#dlq-clear').addEventListener('click', clearFinished);
+    panelEl.querySelector('#dlq-close').addEventListener('click', closePanel);
   }
 
   function statusLabel(entry) {
@@ -338,11 +357,15 @@
 
   function render() {
     if (badgeEl) {
-      const n = activeCount();
-      badgeEl.textContent = String(n);
-      badgeEl.classList.toggle('hidden', n === 0);
+      const active = activeCount();
+      const problems = problemCount();
+      badgeEl.textContent = String(active + problems);
+      badgeEl.classList.toggle('hidden', active + problems === 0);
+      badgeEl.classList.toggle('dlq-badge-error', problems > 0);
+      btnEl.setAttribute('aria-label', `File d’attente : ${active} en cours, ${problems} à vérifier`);
     }
     if (!listEl) return;
+    const scrollTop = listEl.scrollTop;
     listEl.replaceChildren();
     if (!items.length) {
       const empty = document.createElement('p');
@@ -379,7 +402,17 @@
         track.className = 'dlq-track';
         const fill = document.createElement('div');
         fill.className = 'dlq-fill';
-        fill.style.width = `${entry.progress || 0}%`;
+        const nextProgress = entry.progress || 0;
+        const previousProgress = renderedProgress.get(entry.id);
+        fill.style.width = `${previousProgress ?? nextProgress}%`;
+        renderedProgress.set(entry.id, nextProgress);
+        if (previousProgress !== undefined && previousProgress !== nextProgress) {
+          requestAnimationFrame(() => {
+            if (!fill.isConnected) return;
+            void fill.offsetWidth;
+            fill.style.width = `${nextProgress}%`;
+          });
+        }
         track.appendChild(fill);
         const label = document.createElement('p');
         label.className = 'dlq-status';
@@ -393,12 +426,17 @@
       } else if (entry.status === 'done' && entry.saveError) {
         const label = document.createElement('p');
         label.className = 'dlq-status dlq-status-error';
-        label.innerHTML = ICON_ERR + ' ' + entry.saveError;
-        body.appendChild(label);
+        label.innerHTML = ICON_ERR;
+        label.append(' Échec de l’enregistrement');
+        const detail = document.createElement('p');
+        detail.className = 'dlq-error-detail';
+        detail.textContent = entry.saveError;
+        body.append(label, detail);
       } else if (entry.status === 'done' && entry.qualityMismatch) {
         const label = document.createElement('p');
         label.className = 'dlq-status dlq-status-warn';
-        label.innerHTML = ICON_WARN + ' ' + entry.qualityMismatch;
+        label.innerHTML = ICON_WARN;
+        label.append(' ' + entry.qualityMismatch);
         body.appendChild(label);
       } else if (entry.status === 'done') {
         const label = document.createElement('p');
@@ -408,8 +446,12 @@
       } else if (entry.status === 'error') {
         const label = document.createElement('p');
         label.className = 'dlq-status dlq-status-error';
-        label.innerHTML = ICON_ERR + ' ' + (entry.error || 'Erreur');
-        body.appendChild(label);
+        label.innerHTML = ICON_ERR;
+        label.append(' Échec du téléchargement');
+        const detail = document.createElement('p');
+        detail.className = 'dlq-error-detail';
+        detail.textContent = entry.error || 'Erreur inconnue';
+        body.append(label, detail);
       } else if (entry.status === 'cancelled') {
         const label = document.createElement('p');
         label.className = 'dlq-status';
@@ -459,6 +501,7 @@
       row.append(thumb, body, actions);
       listEl.appendChild(row);
     });
+    listEl.scrollTop = scrollTop;
   }
 
   // ── Téléchargements rapides (réglages "optimal" par défaut, sans écran

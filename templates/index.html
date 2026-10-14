@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Eclypse Downloader</title>
-  <link rel="stylesheet" href="/static/style.css?v=8">
+  <link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
 
@@ -18,12 +18,13 @@
           <a href="/spotify">SpotiFLAC</a>
           <a href="/deemix">Deemix</a>
         </nav>
+        <div class="header-actions" aria-label="Téléchargements"></div>
       </div>
       <div class="home-hero">
         <div>
           <p class="eyebrow">VOTRE ESPACE DE TÉLÉCHARGEMENT</p>
           <h1>Vidéo ou musique,<br><span>à vous de choisir.</span></h1>
-          <p class="hero-description">Collez un lien ou recherchez un titre. Analysez le résultat, choisissez votre format, puis lancez le téléchargement.</p>
+          <p class="hero-description">Cherchez une vidéo par nom ou par lien, ou trouvez une musique. Analysez le résultat, choisissez votre format, puis lancez le téléchargement.</p>
         </div>
         <div class="hero-sources" aria-label="Sources compatibles"><span>YouTube</span><span>SoundCloud</span><span>TikTok</span><span>et plus</span></div>
       </div>
@@ -35,16 +36,16 @@
       <div class="workspace-shell">
         <div class="workspace-heading"><span class="step-number">01</span><div><p class="eyebrow">COMMENCER</p><h2>Que voulez-vous télécharger ?</h2></div></div>
         <div class="mode-tabs" role="tablist" aria-label="Méthode de recherche">
-          <button class="mode-tab active" id="tab-url-btn" data-mode="url" role="tab" aria-controls="sec-url" aria-selected="true">J’ai un lien</button>
-          <button class="mode-tab" id="tab-search-btn" data-mode="search" role="tab" aria-controls="sec-search" aria-selected="false">Je cherche un titre</button>
+          <button class="mode-tab active" id="tab-url-btn" data-mode="url" role="tab" aria-controls="sec-url" aria-selected="true">Chercher une vidéo par nom ou par lien</button>
+          <button class="mode-tab" id="tab-search-btn" data-mode="search" role="tab" aria-controls="sec-search" aria-selected="false">Chercher une musique</button>
         </div>
         <div class="workspace-grid"><div class="workspace-main">
 
       <!-- Mode 1 : URL (Vidéo / Playlist / Spotify Album / Track) -->
       <section id="sec-url" class="mode-sec">
-        <label class="field-label" for="url-input">Lien vidéo, morceau, album ou playlist</label>
+        <label class="field-label" for="url-input">Nom de vidéo ou lien à télécharger</label>
         <div class="input-row">
-          <input type="text" id="url-input" placeholder="https://youtube.com/watch?v=…" autocomplete="off" spellcheck="false">
+          <input type="text" id="url-input" placeholder="Nom de la vidéo ou lien YouTube, SoundCloud…" autocomplete="off" spellcheck="false">
           <button id="fetch-btn">
             <span id="btn-label">Analyser</span>
             <span id="btn-spinner" class="spinner hidden"></span>
@@ -81,7 +82,7 @@
         <div id="music-results" class="results-grid"></div>
         <div id="music-error" class="error hidden" style="margin-top: 12px;"></div>
       </section>
-        </div><aside class="workspace-aside"><p class="eyebrow">COMMENT ÇA MARCHE</p><ol><li><span>01</span><div><strong>Analysez</strong><p>Collez un lien ou choisissez un résultat.</p></div></li><li><span>02</span><div><strong>Réglez</strong><p>Sélectionnez le format et la qualité adaptés.</p></div></li><li><span>03</span><div><strong>Récupérez</strong><p>Suivez le traitement et sauvegardez le fichier.</p></div></li></ol><p class="aside-note">Pour la musique en haute qualité, passez par <a href="/spotify">SpotiFLAC</a> ou <a href="/deemix">Deemix</a>.</p></aside></div>
+        </div><aside class="workspace-aside"><p class="eyebrow">COMMENT ÇA MARCHE</p><ol><li><span>01</span><div><strong>Analysez</strong><p>Cherchez par nom ou collez un lien.</p></div></li><li><span>02</span><div><strong>Réglez</strong><p>Sélectionnez le format et la qualité adaptés.</p></div></li><li><span>03</span><div><strong>Récupérez</strong><p>Suivez le traitement et sauvegardez le fichier.</p></div></li></ol><p class="aside-note">Pour la musique en haute qualité, passez par <a href="/spotify">SpotiFLAC</a> ou <a href="/deemix">Deemix</a>.</p></aside></div>
       </div>
 
       <div id="error-msg" class="error hidden"></div>
@@ -258,7 +259,7 @@
   <script src="/static/persist.js"></script>
   <script src="/static/service-history.js?v=1"></script>
   <script src="/static/nav.js"></script>
-  <script src="/static/downloads-queue.js?v=7"></script>
+  <script src="/static/downloads-queue.js?v=8"></script>
   <script src="/static/app.js?v=9"></script>
 </body>
 </html>
