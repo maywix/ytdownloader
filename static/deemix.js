@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const DOWNLOAD_KEY = 'deemix_download';
   const CARD_KEY = 'deemix_card';
+  const navigation = YTServiceHistory.create('deemix', renderHistoryView);
   const SEL_KEY = 'deemix_selection';
   const PREFS_KEY = 'deemix_prefs';
   let activeDownloadId = null;
@@ -137,7 +138,9 @@ document.addEventListener('DOMContentLoaded', () => {
       deemixData = data;
       renderMusic(data);
       show(card);
-      YTPersist.save(CARD_KEY, { url, data, origin: fromSearch === true });
+      const saved = { url, data, origin: fromSearch === true };
+      YTPersist.save(CARD_KEY, saved);
+      navigation.push('detail', { card: saved });
     } catch (error) {
       showError(error.message || 'Serveur inaccessible.');
     } finally {
@@ -240,7 +243,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!response.ok || data.error) throw new Error(data.error || 'Recherche impossible.');
       latestSearchResults = data.results || [];
       renderSearchResults(latestSearchResults);
-      saveSearchState({ query, results: latestSearchResults, filter: selectedSearchFilter });
+      show(searchResults);
+      const search = { query, results: latestSearchResults, filter: selectedSearchFilter };
+      saveSearchState(search);
+      navigation.push('search', { search });
+      show(backBtn);
     } catch (error) {
       showError(error.message || 'Serveur inaccessible.');
     } finally {
@@ -317,6 +324,7 @@ document.addEventListener('DOMContentLoaded', () => {
     hide(doneCard);
     resetProgress();
     show(progressCard);
+    navigation.push('progress');
 
     const total = (deemixData.tracks || []).length;
     const selected = selectedIndices();
@@ -343,10 +351,14 @@ document.addEventListener('DOMContentLoaded', () => {
       activeDownloadId = data.download_id;
       window.DLQueue.attach(queueEntry, data.download_id);
       YTPersist.save(DOWNLOAD_KEY, { downloadId: data.download_id });
+      if (navigation.current().view !== 'progress') return;
+      navigation.replace('progress', { downloadId: data.download_id });
       pollProgress(data.download_id);
     } catch (error) {
       window.DLQueue.fail(queueEntry, error.message || 'Serveur inaccessible.');
+      if (navigation.current().view !== 'progress') { downloadButton.disabled = false; return; }
       backToCard();
+      navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
       downloadButton.disabled = false;
       showError(error.message || 'Serveur inaccessible.');
     }
@@ -358,6 +370,7 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const response = await fetch(`/api/progress/${downloadId}`);
         const data = await response.json();
+        if (navigation.current().view !== 'progress') return;
         if (data.error) throw new Error(data.error);
         updateProgress(data);
         if (data.status === 'done') {
@@ -368,11 +381,13 @@ document.addEventListener('DOMContentLoaded', () => {
           document.getElementById('deemix-done-name').textContent = data.filename || '';
           document.getElementById('deemix-save-link').href = `/api/file/${downloadId}`;
           show(doneCard);
+          navigation.replace('done', { downloadId, filename: data.filename });
           YTPersist.clear(DOWNLOAD_KEY);
         } else if (data.status === 'error') {
           clearInterval(polling);
           downloadButton.disabled = false;
           backToCard();
+          navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
           activeDownloadId = null;
           showError(data.error || 'Erreur pendant le téléchargement.');
           YTPersist.clear(DOWNLOAD_KEY);
@@ -380,13 +395,16 @@ document.addEventListener('DOMContentLoaded', () => {
           clearInterval(polling);
           downloadButton.disabled = false;
           backToCard();
+          navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
           activeDownloadId = null;
           YTPersist.clear(DOWNLOAD_KEY);
         }
       } catch (error) {
+        if (navigation.current().view !== 'progress') return;
         clearInterval(polling);
         downloadButton.disabled = false;
         backToCard();
+        navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
         activeDownloadId = null;
         showError(error.message || 'Serveur inaccessible.');
         YTPersist.clear(DOWNLOAD_KEY);
@@ -400,6 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
     await window.DLQueue.cancelById(activeDownloadId);
     clearInterval(polling);
     backToCard();
+    navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
     downloadButton.disabled = false;
     YTPersist.clear(DOWNLOAD_KEY);
     activeDownloadId = null;
@@ -461,35 +480,48 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function hide(element) { element.classList.add('hidden'); }
 
-  // ── Bouton retour : visible dès qu'une carte résultat/progression/terminé
-  // est affichée, ramène à l'état de recherche initial sans recharger la
-  // page. Le téléchargement en cours continue côté serveur (resumable via
-  // YTPersist au prochain chargement) — "retour" arrête juste le suivi UI.
+  // Le bouton Retour suit les mêmes étapes que celui du navigateur.
   [card, progressCard, doneCard].forEach((el) => {
     const observer = new MutationObserver(() => {
-      const anyVisible = [card, progressCard, doneCard].some((c) => !c.classList.contains('hidden'));
-      backBtn.classList.toggle('hidden', !anyVisible);
+      backBtn.classList.toggle('hidden', navigation.current().view === 'home');
     });
     observer.observe(el, { attributes: true, attributeFilter: ['class'] });
   });
-  backBtn.addEventListener('click', () => {
+  backBtn.addEventListener('click', () => navigation.back());
+
+  function renderHistoryView(view, state = {}) {
     clearInterval(polling);
-    YTPersist.clear(CARD_KEY);
-    YTPersist.clear(SEL_KEY);
-    deemixData = null;
-    hide(card);
-    hide(progressCard);
-    hide(doneCard);
-    hide(errorBox);
-    urlInput.value = '';
-    urlInput.focus();
-    if (latestSearchResults.length) show(searchResults);
-  });
+    previewAudio.pause();
+    [card, progressCard, doneCard, errorBox, searchResults].forEach(hide);
+    if (view !== 'progress') {
+      activeDownloadId = null;
+      downloadButton.disabled = false;
+    }
+    if (view === 'home') {
+      urlInput.value = '';
+    } else if (view === 'search') {
+      urlInput.value = '';
+      restoreSearchState(state.search || YTPersist.load(STATE_KEY));
+      show(searchResults);
+    } else if (view === 'detail') {
+      restoreCard(state.card || YTPersist.load(CARD_KEY));
+    } else if (view === 'progress') {
+      const saved = YTPersist.load(CARD_KEY);
+      if (saved) { restoreCard(saved); hide(card); }
+      resetProgress();
+      show(progressCard);
+      resumeActiveDownload();
+    } else if (view === 'done' && state.downloadId) {
+      document.getElementById('deemix-done-name').textContent = state.filename || '';
+      document.getElementById('deemix-save-link').href = `/api/file/${state.downloadId}`;
+      show(doneCard);
+    }
+    backBtn.classList.toggle('hidden', view === 'home');
+  }
 
   // ── Recherche restaurée uniquement lors d'un retour arrière du navigateur
   // (pas sur un simple rechargement ni une arrivée directe sur la page) ──
-  function restoreSearchState() {
-    const state = YTPersist.load(STATE_KEY);
+  function restoreSearchState(state = YTPersist.load(STATE_KEY)) {
     if (!state || !state.results) return;
 
     searchInput.value = state.query || '';
@@ -537,9 +569,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('deemix-advanced').addEventListener('toggle', savePrefs);
 
-  function restoreCard() {
-    const saved = YTPersist.load(CARD_KEY);
+  function restoreCard(saved = YTPersist.load(CARD_KEY)) {
     if (!saved || !saved.data) return;
+    YTPersist.save(CARD_KEY, saved);
     const selection = YTPersist.load(SEL_KEY);
     deemixData = saved.data;
     urlInput.value = saved.url || '';
@@ -556,19 +588,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
   restorePrefs();
   restoreSearchState();
-  restoreCard();
+  if (navigation.current().view === 'home') {
+    const savedCard = YTPersist.load(CARD_KEY);
+    const savedDownload = YTPersist.load(DOWNLOAD_KEY);
+    if (savedCard) navigation.push('detail', { card: savedCard });
+    if (savedDownload?.downloadId) navigation.push('progress', savedDownload);
+  }
+  renderHistoryView(navigation.current().view, navigation.current());
 
   // ── Le téléchargement continue côté serveur même après un F5 : on retrouve
   // sa progression s'il tourne encore, sans rien afficher s'il est déjà fini
   // ou en erreur (pour ne pas faire réapparaître un vieux résultat) ──
   async function resumeActiveDownload() {
-    const state = YTPersist.load(DOWNLOAD_KEY);
+    if (navigation.current().view !== 'progress') return;
+    const state = navigation.current().downloadId ? navigation.current() : YTPersist.load(DOWNLOAD_KEY);
     if (!state || !state.downloadId) return;
     try {
       const response = await fetch(`/api/progress/${state.downloadId}`);
       const data = await response.json();
-      if (data.error || data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
+      if (navigation.current().view !== 'progress') return;
+      if (data.status === 'done') {
+        document.getElementById('deemix-done-name').textContent = data.filename || '';
+        document.getElementById('deemix-save-link').href = `/api/file/${state.downloadId}`;
+        hide(progressCard);
+        show(doneCard);
+        navigation.replace('done', { downloadId: state.downloadId, filename: data.filename });
         YTPersist.clear(DOWNLOAD_KEY);
+        return;
+      }
+      if (data.error || data.status === 'error' || data.status === 'cancelled') {
+        YTPersist.clear(DOWNLOAD_KEY);
+        renderHistoryView('detail', { card: YTPersist.load(CARD_KEY) });
+        navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
         return;
       }
       hide(card);
@@ -582,7 +633,6 @@ document.addEventListener('DOMContentLoaded', () => {
       /* pas grave : au pire on rate la reprise, le téléchargement continue quand même côté serveur */
     }
   }
-  resumeActiveDownload();
 
   // ── Indicateur de version du paquet deemix (auto-mis à jour côté serveur) ──
   async function loadVersionBadge() {

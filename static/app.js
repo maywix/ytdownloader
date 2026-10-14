@@ -88,6 +88,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const DOWNLOAD_KEY = 'ytdown_download';
   let activeDownloadId = null;
   let activeStartBtn = null;
+  const navigation = YTServiceHistory.create('ytdown', renderHistoryView);
 
   fetchBtn.addEventListener('click', runFetch);
   urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') runFetch(); });
@@ -130,10 +131,14 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.href = `/spotify?url=${encodeURIComponent(raw)}`;
       } else if (data.type === 'playlist') {
         renderPlaylistCard(data);
-        YTPersist.save(CARD_KEY, { kind: 'playlist', url: raw, data, origin: originContext });
+        const saved = { kind: 'playlist', url: raw, data, origin: originContext };
+        YTPersist.save(CARD_KEY, saved);
+        navigation.push('detail', { card: saved });
       } else {
         renderVideoCard(data);
-        YTPersist.save(CARD_KEY, { kind: 'video', url: raw, data, origin: originContext });
+        const saved = { kind: 'video', url: raw, data, origin: originContext };
+        YTPersist.save(CARD_KEY, saved);
+        navigation.push('detail', { card: saved });
       }
     } catch {
       showError('Serveur inaccessible');
@@ -152,7 +157,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       renderGrid(urlSearchResults, data.results);
       show(urlSearchResults);
-      saveSearchState({ context: 'url', query: q, results: data.results });
+      const search = { context: 'url', query: q, results: data.results };
+      saveSearchState(search);
+      navigation.push('search', { search });
+      show(backBtn);
     } catch {
       showError('Serveur inaccessible');
     }
@@ -344,7 +352,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       renderGrid(musicResults, data.results);
-      saveSearchState({ context: 'music', query: q, source: musicSource, results: data.results });
+      const search = { context: 'music', query: q, source: musicSource, results: data.results };
+      saveSearchState(search);
+      navigation.push('search', { search });
+      show(backBtn);
     } catch {
       musicError.textContent = 'Serveur inaccessible';
       show(musicError);
@@ -428,6 +439,7 @@ document.addEventListener('DOMContentLoaded', () => {
     hideAllCards();
     resetProgress();
     show(progressCard);
+    navigation.push('progress');
 
     const queueEntry = window.DLQueue.add({
       service: 'ytdown', autoSave: autoDlChk.checked,
@@ -460,8 +472,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
       if (!res.ok || data.error) {
         window.DLQueue.fail(queueEntry, data.error || 'Erreur');
+        if (navigation.current().view !== 'progress') { btn.disabled = false; return; }
         showError(data.error || 'Erreur');
         backToCard();
+        navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
         btn.disabled = false;
         return;
       }
@@ -469,11 +483,15 @@ document.addEventListener('DOMContentLoaded', () => {
       activeStartBtn = btn;
       window.DLQueue.attach(queueEntry, data.download_id);
       YTPersist.save(DOWNLOAD_KEY, { downloadId: data.download_id, mode });
+      if (navigation.current().view !== 'progress') return;
+      navigation.replace('progress', { downloadId: data.download_id, mode });
       pollProgress(data.download_id, btn);
     } catch {
       window.DLQueue.fail(queueEntry, 'Serveur inaccessible');
+      if (navigation.current().view !== 'progress') { btn.disabled = false; return; }
       showError('Serveur inaccessible');
       backToCard();
+      navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
       btn.disabled = false;
     }
   }
@@ -491,9 +509,11 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const res = await fetch(`/api/progress/${id}`);
         const data = await res.json();
+        if (navigation.current().view !== 'progress') return;
         if (data.error) {
           stopPoll();
-          backToCard();
+          renderHistoryView('detail', { card: YTPersist.load(CARD_KEY) });
+          navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
           showError(data.error);
           if (btn) btn.disabled = false;
           YTPersist.clear(DOWNLOAD_KEY);
@@ -507,19 +527,22 @@ document.addEventListener('DOMContentLoaded', () => {
           stopPoll();
           if (btn) btn.disabled = false;
           showDone(id, data.filename, data.is_playlist);
+          navigation.replace('done', { downloadId: id, filename: data.filename, isPlaylist: data.is_playlist });
           YTPersist.clear(DOWNLOAD_KEY);
           clearActiveDownload();
         } else if (data.status === 'error') {
           stopPoll();
           if (btn) btn.disabled = false;
-          backToCard();
+          renderHistoryView('detail', { card: YTPersist.load(CARD_KEY) });
+          navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
           showError(data.error || 'Erreur lors du traitement');
           YTPersist.clear(DOWNLOAD_KEY);
           clearActiveDownload();
         } else if (data.status === 'cancelled') {
           stopPoll();
           if (btn) btn.disabled = false;
-          backToCard();
+          renderHistoryView('detail', { card: YTPersist.load(CARD_KEY) });
+          navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
           YTPersist.clear(DOWNLOAD_KEY);
           clearActiveDownload();
         }
@@ -533,6 +556,7 @@ document.addEventListener('DOMContentLoaded', () => {
     await window.DLQueue.cancelById(activeDownloadId);
     stopPoll();
     backToCard();
+    navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
     if (activeStartBtn) activeStartBtn.disabled = false;
     YTPersist.clear(DOWNLOAD_KEY);
     clearActiveDownload();
@@ -631,7 +655,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function stopPoll() { if (pollTimer) clearInterval(pollTimer); }
-  function showError(msg) { errorMsg.textContent = msg; show(errorMsg); }
+  function showError(msg) {
+    errorMsg.textContent = msg;
+    show(errorMsg);
+    if (navigation.current().view !== 'home') show(backBtn);
+  }
   function show(el) { if (el) el.classList.remove('hidden'); }
   function hide(el) { if (el) el.classList.add('hidden'); }
   function hideAllCards() { [videoCard, playlistCard, progressCard, doneCard, errorMsg, urlSearchResults, backBtn].forEach(hide); }
@@ -644,35 +672,43 @@ document.addEventListener('DOMContentLoaded', () => {
     if (filled) show(lastCard);
   }
 
-  // ── Bouton retour : visible dès qu'une carte résultat/progression/terminé
-  // est affichée, ramène à l'état de recherche initial sans recharger la
-  // page. Le téléchargement en cours continue côté serveur (resumable via
-  // YTPersist au prochain chargement) — "retour" arrête juste le suivi UI.
+  // Le bouton Retour utilise le même historique que celui du navigateur.
   document.querySelectorAll('#video-card, #playlist-card, #progress-card, #done-card').forEach((card) => {
     const observer = new MutationObserver(() => {
-      const anyVisible = [videoCard, playlistCard, progressCard, doneCard].some((c) => !c.classList.contains('hidden'));
-      backBtn.classList.toggle('hidden', !anyVisible);
+      backBtn.classList.toggle('hidden', navigation.current().view === 'home');
     });
     observer.observe(card, { attributes: true, attributeFilter: ['class'] });
   });
-  backBtn.addEventListener('click', () => {
+  backBtn.addEventListener('click', () => navigation.back());
+
+  function renderHistoryView(view, state = {}) {
     stopPoll();
     hideAllCards();
-    YTPersist.clear(CARD_KEY);
-    lastCard = null;
-    const st = YTPersist.load(STATE_KEY);
-    if (originContext === 'music') {
-      urlInput.value = '';
-      document.getElementById('tab-search-btn').click();
-    } else if (originContext === 'url' && urlSearchResults.children.length) {
-      urlInput.value = (st && st.context === 'url' && st.query) || '';
-      show(urlSearchResults);
-    } else {
-      urlInput.value = '';
+    if (view !== 'progress') {
+      dlBtn.disabled = false;
+      pDlBtn.disabled = false;
+      clearActiveDownload();
     }
-    originContext = null;
-    urlInput.focus();
-  });
+    if (view === 'home') {
+      document.getElementById('tab-url-btn').click();
+      urlInput.value = '';
+      originContext = null;
+    } else if (view === 'search') {
+      const search = state.search || YTPersist.load(STATE_KEY);
+      if (search) restoreSearchState(search);
+    } else if (view === 'detail') {
+      restoreCard(state.card || YTPersist.load(CARD_KEY));
+    } else if (view === 'progress') {
+      const saved = YTPersist.load(CARD_KEY);
+      if (saved) { restoreCard(saved); hideAllCards(); }
+      resetProgress();
+      show(progressCard);
+      resumeActiveDownload();
+    } else if (view === 'done' && state.downloadId) {
+      showDone(state.downloadId, state.filename, state.isPlaylist);
+    }
+    backBtn.classList.toggle('hidden', view === 'home');
+  }
 
   function setLoading(on) {
     fetchBtn.disabled = on;
@@ -688,8 +724,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Recherche restaurée uniquement lors d'un retour arrière du navigateur
   // (pas sur un simple rechargement ni une arrivée directe sur la page) ──
-  function restoreSearchState() {
-    const state = YTPersist.load(STATE_KEY);
+  function restoreSearchState(state = YTPersist.load(STATE_KEY)) {
     if (!state || !state.results) return;
 
     if (state.context === 'music') {
@@ -724,9 +759,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  function restoreCard() {
-    const saved = YTPersist.load(CARD_KEY);
+  function restoreCard(saved = YTPersist.load(CARD_KEY)) {
     if (!saved || !saved.data) return;
+    YTPersist.save(CARD_KEY, saved);
     currentUrl = saved.url || '';
     originContext = saved.origin || null;
     document.getElementById('tab-url-btn').click();
@@ -742,19 +777,35 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   restorePrefs();
-  restoreCard();
+  const savedCard = YTPersist.load(CARD_KEY);
+  const savedDownload = YTPersist.load(DOWNLOAD_KEY);
+  if (navigation.current().view === 'home') {
+    if (savedCard) navigation.push('detail', { card: savedCard });
+    if (savedDownload?.downloadId) navigation.push('progress', savedDownload);
+  }
+  renderHistoryView(navigation.current().view, navigation.current());
 
   // ── Le téléchargement continue côté serveur même après un F5 : on retrouve
   // sa progression s'il tourne encore, sans rien afficher s'il est déjà fini
   // ou en erreur (pour ne pas faire réapparaître un vieux résultat) ──
   async function resumeActiveDownload() {
-    const state = YTPersist.load(DOWNLOAD_KEY);
+    if (navigation.current().view !== 'progress') return;
+    const state = navigation.current().downloadId ? navigation.current() : YTPersist.load(DOWNLOAD_KEY);
     if (!state || !state.downloadId) return;
     try {
       const res = await fetch(`/api/progress/${state.downloadId}`);
       const data = await res.json();
-      if (data.error || data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
+      if (navigation.current().view !== 'progress') return;
+      if (data.status === 'done') {
+        showDone(state.downloadId, data.filename, data.is_playlist);
+        navigation.replace('done', { downloadId: state.downloadId, filename: data.filename, isPlaylist: data.is_playlist });
         YTPersist.clear(DOWNLOAD_KEY);
+        return;
+      }
+      if (data.error || data.status === 'error' || data.status === 'cancelled') {
+        YTPersist.clear(DOWNLOAD_KEY);
+        renderHistoryView('detail', { card: YTPersist.load(CARD_KEY) });
+        navigation.replace('detail', { card: YTPersist.load(CARD_KEY) });
         return;
       }
       const btn = state.mode === 'playlist' ? pDlBtn : dlBtn;
@@ -770,7 +821,6 @@ document.addEventListener('DOMContentLoaded', () => {
       /* pas grave : au pire on rate la reprise, le téléchargement continue quand même côté serveur */
     }
   }
-  resumeActiveDownload();
 
   // ── Indicateur de version yt-dlp (auto-mis à jour côté serveur) ──
   async function loadVersionBadge() {
