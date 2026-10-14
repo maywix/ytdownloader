@@ -2,6 +2,7 @@ import asyncio
 import io
 import importlib.metadata
 import json
+import logging
 import os
 import queue
 import re
@@ -128,6 +129,39 @@ SPOTIFLAC_SERVICES = [
 ]
 # Sources que la page /spotify laisse choisir à l'utilisateur (menu réglages).
 SPOTIFLAC_ALLOWED_SERVICES = {"ext:tidal-web", "ext:qobuz-web", "ext:amazon", "ext:deezer", "amazon-account"}
+
+
+class _SpotiFLACFailureCapture(logging.Handler):
+    """Retain only the failure category for one download worker, not log details."""
+
+    def __init__(self):
+        super().__init__(logging.WARNING)
+        self.worker_thread = threading.get_ident()
+        self.verification_failed = False
+        self.provider_failed = False
+
+    def emit(self, record):
+        if record.thread != self.worker_thread or not record.name.startswith("SpotiFLAC."):
+            return
+        message = record.getMessage().lower()
+        if "turnstile" in message or "verification paused" in message or "verify_required" in message:
+            self.verification_failed = True
+        if "download failed" in message or "providers failed" in message:
+            self.provider_failed = True
+
+
+def _spotiflac_failure_message(capture: _SpotiFLACFailureCapture, quality: str) -> str:
+    if capture.verification_failed:
+        return (
+            "Les fournisseurs SpotiFLAC demandent une vérification qui a échoué. "
+            "Réessaie plus tard."
+        )
+    if capture.provider_failed and quality in {"HI_RES_LOSSLESS", "HI_RES", "DOLBY_ATMOS"}:
+        return (
+            "Les fournisseurs SpotiFLAC ont échoué pour cette qualité. "
+            "Essaie la qualité Lossless ou une autre source."
+        )
+    return "Aucun fournisseur SpotiFLAC n'a fourni l'audio demandé. Essaie une autre source."
 
 # ── Comptes & configuration admin (persistés hors du dépôt, voir .gitignore) ──
 DATA_DIR = Path("data")
@@ -1765,6 +1799,9 @@ def _download_thread(
             # autre thread (call_soon_threadsafe est la seule façon sûre de
             # toucher un event loop qui tourne ailleurs).
             loop = asyncio.new_event_loop()
+            failure_capture = _SpotiFLACFailureCapture()
+            root_logger = logging.getLogger()
+            root_logger.addHandler(failure_capture)
             try:
                 asyncio.set_event_loop(loop)
                 task = loop.create_task(_run_spotiflac())
@@ -1775,13 +1812,13 @@ def _download_thread(
                 _cleanup_download_artifacts(download_id)
                 return
             finally:
+                root_logger.removeHandler(failure_capture)
                 state["_asyncio_cancel"] = None
                 loop.close()
 
             files = [file for file in out_dir.rglob("*") if file.suffix.lower() in {".flac", ".m4a", ".wv", ".tta", ".wav", ".aiff", ".mp3"}]
             if not files or (isinstance(failed_tracks, list) and failed_tracks):
-                detail = f" Détail : {str(failed_tracks[0])[:300]}" if isinstance(failed_tracks, list) and failed_tracks else ""
-                raise RuntimeError("Aucun fournisseur SpotiFLAC n'a fourni le contenu demandé." + detail)
+                raise RuntimeError(_spotiflac_failure_message(failure_capture, source_quality))
 
             # Une source qui ne trouve pas le vrai master Atmos/Hi-Res peut
             # discrètement renvoyer du stéréo/CD-quality classique en le
