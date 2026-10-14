@@ -16,6 +16,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 from flask import (
@@ -90,6 +91,24 @@ def _load_dotenv():
 
 
 _load_dotenv()
+
+
+def _is_web_url(value: str) -> bool:
+    """Only send HTTP(S) URLs to external extractors."""
+    try:
+        parsed = urlsplit(value)
+        return parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_audio_only_url(value: str) -> bool:
+    try:
+        host = (urlsplit(value).hostname or "").lower()
+        return any(host == domain or host.endswith("." + domain)
+                   for domain in ("soundcloud.com", "bandcamp.com", "audiomack.com"))
+    except (TypeError, ValueError):
+        return False
 
 app = Flask(__name__)
 
@@ -1143,6 +1162,8 @@ def get_info():
     url = request.args.get("url", "").strip()
     if not url:
         return jsonify({"error": "URL manquante"}), 400
+    if not _is_web_url(url):
+        return jsonify({"error": "Collez un lien HTTP ou HTTPS valide."}), 400
 
     sp_data = _parse_spotify_url(url)
     if sp_data:
@@ -1163,8 +1184,7 @@ def get_info():
         with yt_dlp.YoutubeDL(_info_ydl_opts({"extract_flat": "in_playlist"})) as ydl:
             info = ydl.extract_info(url, download=False)
 
-        audio_only_domains = ["soundcloud.com", "bandcamp.com", "audiomack.com"]
-        is_audio_only = any(d in url.lower() for d in audio_only_domains)
+        is_audio_only = _is_audio_only_url(url)
 
         if info.get("_type") in ("playlist", "multi_video") or (
             "entries" in info and info.get("webpage_url_basename") != "watch"
@@ -1425,13 +1445,15 @@ def get_info_for_url(url: str):
         "views": fmt_views(full.get("view_count")),
         "url": url,
         "max_height": heights[0] if heights else None,
-        "audio_only": False,
+        "audio_only": _is_audio_only_url(url),
     })
 
 
 @app.route("/api/download", methods=["POST"])
 def start_download():
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Requête JSON invalide."}), 400
     url = (data.get("url") or "").strip()
     fmt = data.get("format", "best")
     quality = data.get("quality", "1080")
@@ -1444,6 +1466,8 @@ def start_download():
 
     if not url and not spoti_data:
         return jsonify({"error": "URL manquante"}), 400
+    if url and not _is_web_url(url):
+        return jsonify({"error": "Collez un lien HTTP ou HTTPS valide."}), 400
 
     download_id = str(uuid.uuid4())
     downloads[download_id] = {
@@ -1756,7 +1780,8 @@ def _download_thread(
 
             files = [file for file in out_dir.rglob("*") if file.suffix.lower() in {".flac", ".m4a", ".wv", ".tta", ".wav", ".aiff", ".mp3"}]
             if not files or (isinstance(failed_tracks, list) and failed_tracks):
-                raise RuntimeError("Aucun fournisseur SpotiFLAC n'a fourni le contenu demandé")
+                detail = f" Détail : {str(failed_tracks[0])[:300]}" if isinstance(failed_tracks, list) and failed_tracks else ""
+                raise RuntimeError("Aucun fournisseur SpotiFLAC n'a fourni le contenu demandé." + detail)
 
             # Une source qui ne trouve pas le vrai master Atmos/Hi-Res peut
             # discrètement renvoyer du stéréo/CD-quality classique en le
@@ -1853,7 +1878,7 @@ def _download_thread(
         expected_ext = ".flac"
 
     elif fmt == "mp3":
-        bitrate = quality if quality in ("128", "256", "320") else "320"
+        bitrate = quality if quality in ("128", "192", "256", "320") else "320"
         ydl_opts = {
             **base,
             "format": "bestaudio/best",

@@ -9,12 +9,10 @@ document.addEventListener('DOMContentLoaded', () => {
     tab.addEventListener('click', () => {
       modeTabs.forEach(t => {
         t.classList.remove('active');
-        t.style.borderColor = 'var(--border)';
-        t.style.color = 'var(--muted)';
+        t.setAttribute('aria-selected', 'false');
       });
       tab.classList.add('active');
-      tab.style.borderColor = 'var(--border2)';
-      tab.style.color = '#fff';
+      tab.setAttribute('aria-selected', 'true');
 
       const mode = tab.dataset.mode;
       secUrl.classList.toggle('hidden', mode !== 'url');
@@ -58,10 +56,29 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentUrl = '';
   let curFmt = 'best';
   let curQ = '1080';
+  let curBitrate = '320';
   let pCurFmt = 'mp4';
   let pCurQ = '1080';
+  let pCurBitrate = '320';
+  let currentAudioOnly = false;
+  let playlistAudioOnly = false;
   let channelScope = 'all';
   let datePreset = 'now-1year';
+
+  // Page « fixe » : format/qualité choisis, fiche analysée et provenance
+  // (résultats de recherche) survivent à un changement de page ou un F5.
+  const PREFS_KEY = 'ytdown_prefs';
+  const CARD_KEY = 'ytdown_card';
+  let lastCard = null;
+  let originContext = null;
+
+  function savePrefs() {
+    YTPersist.save(PREFS_KEY, { fmt: curFmt, q: curQ, bitrate: curBitrate, pFmt: pCurFmt, pQ: pCurQ, pBitrate: pCurBitrate });
+  }
+  document.addEventListener('click', (event) => {
+    const t = event.target;
+    if (event.isTrusted && t && t.closest && t.closest('#fmt-tabs, #q-grid, #audio-q-grid, #p-fmt-tabs, #p-q-grid, #p-audio-q-grid')) savePrefs();
+  });
 
   const STATE_KEY = 'ytdown_state';
   function saveSearchState(patch) {
@@ -79,11 +96,13 @@ document.addEventListener('DOMContentLoaded', () => {
     return /^[a-z][a-z0-9+.-]*:\/\//i.test(s);
   }
 
-  async function runFetch() {
+  async function runFetch(fromResult) {
     const raw = urlInput.value.trim();
     if (!raw) return;
+    if (fromResult !== true) originContext = null;
 
     hideAllCards();
+    YTPersist.clear(CARD_KEY);
     hide(urlSearchResults);
     setLoading(true);
 
@@ -111,10 +130,10 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.href = `/spotify?url=${encodeURIComponent(raw)}`;
       } else if (data.type === 'playlist') {
         renderPlaylistCard(data);
-        if (autoDlChk.checked) pDlBtn.click();
+        YTPersist.save(CARD_KEY, { kind: 'playlist', url: raw, data, origin: originContext });
       } else {
         renderVideoCard(data);
-        if (autoDlChk.checked) dlBtn.click();
+        YTPersist.save(CARD_KEY, { kind: 'video', url: raw, data, origin: originContext });
       }
     } catch {
       showError('Serveur inaccessible');
@@ -153,15 +172,29 @@ document.addEventListener('DOMContentLoaded', () => {
   // ni FLAC (le flux source est déjà compressé) — seulement MP3 et M4A (AAC).
   const hiddenWhenAudioOnly = new Set(['mp4', 'mkv', 'best', 'flac']);
   function applyAudioOnly(isAudioOnly) {
+    currentAudioOnly = isAudioOnly;
     document.querySelectorAll('#fmt-tabs .fmt-tab').forEach((chip) => {
       const hide = isAudioOnly && hiddenWhenAudioOnly.has(chip.dataset.fmt);
       chip.classList.toggle('hidden', hide);
     });
-    document.getElementById('quality-section').style.display = isAudioOnly ? 'none' : '';
     if (isAudioOnly && hiddenWhenAudioOnly.has(curFmt)) {
       const mp3Tab = document.querySelector('#fmt-tabs .fmt-tab[data-fmt="mp3"]');
       if (mp3Tab) mp3Tab.click();
     }
+    updateVideoFormatUI();
+  }
+
+  function updateVideoFormatUI() {
+    document.getElementById('quality-section').classList.toggle('hidden', currentAudioOnly || !['mp4', 'mkv'].includes(curFmt));
+    document.getElementById('audio-quality-section').classList.toggle('hidden', curFmt !== 'mp3');
+  }
+
+  function updatePlaylistFormatUI() {
+    document.querySelectorAll('#p-fmt-tabs .fmt-tab').forEach((chip) => {
+      chip.classList.toggle('hidden', playlistAudioOnly && chip.dataset.fmt !== 'mp3');
+    });
+    document.getElementById('p-quality-section').classList.toggle('hidden', playlistAudioOnly || pCurFmt !== 'mp4');
+    document.getElementById('p-audio-quality-section').classList.toggle('hidden', pCurFmt !== 'mp3');
   }
 
   function renderPlaylistCard(data) {
@@ -169,6 +202,9 @@ document.addEventListener('DOMContentLoaded', () => {
     pTitle.textContent = data.title || '';
     pChannel.textContent = data.channel || '';
     pCount.textContent = `${data.count} éléments`;
+    playlistAudioOnly = !!data.audio_only;
+    if (playlistAudioOnly && pCurFmt !== 'mp3') document.querySelector('#p-fmt-tabs .fmt-tab[data-fmt="mp3"]').click();
+    updatePlaylistFormatUI();
     document.getElementById('channel-scope-section').classList.toggle('hidden', !data.is_channel);
     resetChannelScopeUI();
     show(playlistCard);
@@ -180,7 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('#p-fmt-tabs .fmt-tab').forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
       pCurFmt = chip.dataset.fmt;
-      document.getElementById('p-quality-section').style.display = (pCurFmt === 'mp4') ? '' : 'none';
+      updatePlaylistFormatUI();
     });
   });
 
@@ -189,6 +225,13 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('#p-q-grid .q-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       pCurQ = btn.dataset.q;
+    });
+  });
+  document.querySelectorAll('#p-audio-q-grid .q-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#p-audio-q-grid .q-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      pCurBitrate = btn.dataset.q;
     });
   });
 
@@ -228,7 +271,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('#fmt-tabs .fmt-tab').forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
       curFmt = chip.dataset.fmt;
-      document.getElementById('quality-section').style.display = (curFmt === 'mp3' || curFmt === 'flac' || curFmt === 'm4a') ? 'none' : 'block';
+      updateVideoFormatUI();
     });
   });
 
@@ -237,6 +280,13 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('#q-grid .q-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       curQ = btn.dataset.q;
+    });
+  });
+  document.querySelectorAll('#audio-q-grid .q-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#audio-q-grid .q-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      curBitrate = btn.dataset.q;
     });
   });
 
@@ -254,14 +304,10 @@ document.addEventListener('DOMContentLoaded', () => {
     chip.addEventListener('click', () => {
       document.querySelectorAll('.src-chip').forEach(c => {
         c.classList.remove('active');
-        c.style.border = '1px solid var(--border2)';
-        c.style.background = 'transparent';
-        c.style.color = 'var(--muted2)';
+        c.setAttribute('aria-pressed', 'false');
       });
       chip.classList.add('active');
-      chip.style.border = '1px solid #fff';
-      chip.style.background = '#fff';
-      chip.style.color = '#000';
+      chip.setAttribute('aria-pressed', 'true');
       musicSource = chip.dataset.src;
 
       // Change de filtre → ré-exécute directement la même recherche
@@ -312,23 +358,42 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderGrid(container, results) {
     container.innerHTML = '';
     (results || []).forEach(item => {
-      const card = document.createElement('div');
-      card.className = 'card';
-      card.style.cssText = 'padding: 12px; cursor: pointer; transition: border-color 0.15s;';
-      card.innerHTML = `
-        <div class="thumb-wrap" style="aspect-ratio: 16/9; margin-bottom: 8px;">
-          <img src="${item.thumbnail || ''}" style="width:100%; height:100%; object-fit:cover;">
-          <button type="button" class="quick-dl-btn" title="Télécharger (qualité optimale)">${ICON_DOWNLOAD}</button>
-        </div>
-        <h4 style="font-size: 13px; font-weight: 600; line-height: 1.3; height: 2.6em; overflow: hidden; margin-bottom: 4px;">${item.title}</h4>
-        <p style="font-size: 11px; color: var(--muted);">${item.artist || item.channel || ''}</p>
-      `;
+      const card = document.createElement('article');
+      card.className = 'card search-card';
+      const thumb = document.createElement('div');
+      thumb.className = 'thumb-wrap';
+      const image = document.createElement('img');
+      image.alt = '';
+      image.loading = 'lazy';
+      image.referrerPolicy = 'no-referrer';
+      try {
+        const source = new URL(item.thumbnail || '', window.location.href);
+        if (['http:', 'https:'].includes(source.protocol)) image.src = source.href;
+      } catch { /* pas de miniature exploitable */ }
+      const quickButton = document.createElement('button');
+      quickButton.type = 'button';
+      quickButton.className = 'quick-dl-btn';
+      quickButton.title = 'Télécharger en qualité optimale';
+      quickButton.setAttribute('aria-label', `Télécharger ${item.title || 'ce résultat'}`);
+      quickButton.innerHTML = ICON_DOWNLOAD;
+      thumb.append(image, quickButton);
+      const content = document.createElement('div');
+      content.className = 'search-card-content';
+      const openButton = document.createElement('button');
+      openButton.type = 'button';
+      openButton.className = 'search-card-open';
+      openButton.textContent = item.title || 'Sans titre';
+      const subtitle = document.createElement('p');
+      subtitle.textContent = item.artist || item.channel || '';
+      content.append(openButton, subtitle);
+      card.append(thumb, content);
       card.addEventListener('click', () => {
+        originContext = container === musicResults ? 'music' : 'url';
         urlInput.value = item.url;
         document.getElementById('tab-url-btn').click();
-        runFetch();
+        runFetch(true);
       });
-      card.querySelector('.quick-dl-btn').addEventListener('click', (event) => {
+      quickButton.addEventListener('click', (event) => {
         event.stopPropagation();
         const btn = event.currentTarget;
         btn.disabled = true;
@@ -341,8 +406,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Downloads & Polling ──
-  dlBtn.addEventListener('click', () => startDownload('single', curFmt, curQ));
-  pDlBtn.addEventListener('click', () => startDownload('playlist', pCurFmt, pCurQ));
+  dlBtn.addEventListener('click', () => startDownload('single', curFmt, curFmt === 'mp3' ? curBitrate : curQ));
+  pDlBtn.addEventListener('click', () => startDownload('playlist', pCurFmt, pCurFmt === 'mp3' ? pCurBitrate : pCurQ));
 
   thumbBtn.addEventListener('click', async () => {
     if (!currentUrl) return;
@@ -358,6 +423,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function startDownload(mode, fmt, quality) {
     const btn = mode === 'playlist' ? pDlBtn : dlBtn;
+    lastCard = mode === 'playlist' ? playlistCard : videoCard;
     btn.disabled = true;
     hideAllCards();
     resetProgress();
@@ -395,7 +461,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!res.ok || data.error) {
         window.DLQueue.fail(queueEntry, data.error || 'Erreur');
         showError(data.error || 'Erreur');
-        hide(progressCard);
+        backToCard();
         btn.disabled = false;
         return;
       }
@@ -407,7 +473,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch {
       window.DLQueue.fail(queueEntry, 'Serveur inaccessible');
       showError('Serveur inaccessible');
-      hide(progressCard);
+      backToCard();
       btn.disabled = false;
     }
   }
@@ -427,6 +493,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const data = await res.json();
         if (data.error) {
           stopPoll();
+          backToCard();
           showError(data.error);
           if (btn) btn.disabled = false;
           YTPersist.clear(DOWNLOAD_KEY);
@@ -445,14 +512,14 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (data.status === 'error') {
           stopPoll();
           if (btn) btn.disabled = false;
-          hide(progressCard);
+          backToCard();
           showError(data.error || 'Erreur lors du traitement');
           YTPersist.clear(DOWNLOAD_KEY);
           clearActiveDownload();
         } else if (data.status === 'cancelled') {
           stopPoll();
           if (btn) btn.disabled = false;
-          hide(progressCard);
+          backToCard();
           YTPersist.clear(DOWNLOAD_KEY);
           clearActiveDownload();
         }
@@ -465,7 +532,7 @@ document.addEventListener('DOMContentLoaded', () => {
     progCancelBtn.disabled = true;
     await window.DLQueue.cancelById(activeDownloadId);
     stopPoll();
-    hide(progressCard);
+    backToCard();
     if (activeStartBtn) activeStartBtn.disabled = false;
     YTPersist.clear(DOWNLOAD_KEY);
     clearActiveDownload();
@@ -568,6 +635,14 @@ document.addEventListener('DOMContentLoaded', () => {
   function show(el) { if (el) el.classList.remove('hidden'); }
   function hide(el) { if (el) el.classList.add('hidden'); }
   function hideAllCards() { [videoCard, playlistCard, progressCard, doneCard, errorMsg, urlSearchResults, backBtn].forEach(hide); }
+  // Après une erreur ou une annulation, on revient à la fiche (réglages
+  // intacts) au lieu d'une page vide où il faudrait tout ré-analyser.
+  function backToCard() {
+    hide(progressCard);
+    if (!lastCard) return;
+    const filled = lastCard === playlistCard ? pTitle.textContent : videoTitle.textContent;
+    if (filled) show(lastCard);
+  }
 
   // ── Bouton retour : visible dès qu'une carte résultat/progression/terminé
   // est affichée, ramène à l'état de recherche initial sans recharger la
@@ -583,7 +658,19 @@ document.addEventListener('DOMContentLoaded', () => {
   backBtn.addEventListener('click', () => {
     stopPoll();
     hideAllCards();
-    urlInput.value = '';
+    YTPersist.clear(CARD_KEY);
+    lastCard = null;
+    const st = YTPersist.load(STATE_KEY);
+    if (originContext === 'music') {
+      urlInput.value = '';
+      document.getElementById('tab-search-btn').click();
+    } else if (originContext === 'url' && urlSearchResults.children.length) {
+      urlInput.value = (st && st.context === 'url' && st.query) || '';
+      show(urlSearchResults);
+    } else {
+      urlInput.value = '';
+    }
+    originContext = null;
     urlInput.focus();
   });
 
@@ -602,7 +689,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Recherche restaurée uniquement lors d'un retour arrière du navigateur
   // (pas sur un simple rechargement ni une arrivée directe sur la page) ──
   function restoreSearchState() {
-    if (!YTPersist.isBackForward()) return;
     const state = YTPersist.load(STATE_KEY);
     if (!state || !state.results) return;
 
@@ -613,9 +699,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.src-chip').forEach((chip) => {
         const active = chip.dataset.src === musicSource;
         chip.classList.toggle('active', active);
-        chip.style.border = active ? '1px solid #fff' : '1px solid var(--border2)';
-        chip.style.background = active ? '#fff' : 'transparent';
-        chip.style.color = active ? '#000' : 'var(--muted2)';
+        chip.setAttribute('aria-pressed', String(active));
       });
       renderGrid(musicResults, state.results);
     } else if (state.context === 'url') {
@@ -626,6 +710,39 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   restoreSearchState();
+
+  function restorePrefs() {
+    const p = YTPersist.load(PREFS_KEY);
+    if (!p) return;
+    [['#fmt-tabs .fmt-tab', 'fmt', p.fmt], ['#q-grid .q-btn', 'q', p.q],
+     ['#audio-q-grid .q-btn', 'q', p.bitrate],
+     ['#p-fmt-tabs .fmt-tab', 'fmt', p.pFmt], ['#p-q-grid .q-btn', 'q', p.pQ],
+     ['#p-audio-q-grid .q-btn', 'q', p.pBitrate]].forEach(([sel, key, val]) => {
+      if (!val) return;
+      const el = Array.from(document.querySelectorAll(sel)).find((b) => b.dataset[key] === val);
+      if (el && !el.classList.contains('active')) el.click();
+    });
+  }
+
+  function restoreCard() {
+    const saved = YTPersist.load(CARD_KEY);
+    if (!saved || !saved.data) return;
+    currentUrl = saved.url || '';
+    originContext = saved.origin || null;
+    document.getElementById('tab-url-btn').click();
+    urlInput.value = saved.url || '';
+    hideAllCards();
+    if (saved.kind === 'playlist') {
+      lastCard = playlistCard;
+      renderPlaylistCard(saved.data);
+    } else {
+      lastCard = videoCard;
+      renderVideoCard(saved.data);
+    }
+  }
+
+  restorePrefs();
+  restoreCard();
 
   // ── Le téléchargement continue côté serveur même après un F5 : on retrouve
   // sa progression s'il tourne encore, sans rien afficher s'il est déjà fini

@@ -32,6 +32,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const DOWNLOAD_KEY = 'deemix_download';
+  const CARD_KEY = 'deemix_card';
+  const SEL_KEY = 'deemix_selection';
+  const PREFS_KEY = 'deemix_prefs';
   let activeDownloadId = null;
 
   const previewAudio = new Audio();
@@ -123,6 +126,8 @@ document.addEventListener('DOMContentLoaded', () => {
     hide(card);
     hide(progressCard);
     hide(doneCard);
+    YTPersist.clear(CARD_KEY);
+    YTPersist.clear(SEL_KEY);
     setLoading(true);
 
     try {
@@ -132,11 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
       deemixData = data;
       renderMusic(data);
       show(card);
-      // Un lien collé + Analyser est une intention explicite de télécharger ce
-      // titre précis ; un clic sur un résultat de recherche est exploratoire
-      // (on veut d'abord voir les pistes/réglages) — l'auto-download ne se
-      // déclenche donc que dans le premier cas.
-      if (!fromSearch && autoDlChk.checked) downloadButton.click();
+      YTPersist.save(CARD_KEY, { url, data, origin: fromSearch === true });
     } catch (error) {
       showError(error.message || 'Serveur inaccessible.');
     } finally {
@@ -224,6 +225,7 @@ document.addEventListener('DOMContentLoaded', () => {
       downloadButton.textContent = 'Télécharger le morceau';
     }
     downloadButton.disabled = count === 0;
+    YTPersist.save(SEL_KEY, { unchecked: boxes.filter((box) => !box.checked).map((box) => Number(box.dataset.index)) });
   }
 
   async function searchMusic() {
@@ -344,7 +346,7 @@ document.addEventListener('DOMContentLoaded', () => {
       pollProgress(data.download_id);
     } catch (error) {
       window.DLQueue.fail(queueEntry, error.message || 'Serveur inaccessible.');
-      hide(progressCard);
+      backToCard();
       downloadButton.disabled = false;
       showError(error.message || 'Serveur inaccessible.');
     }
@@ -370,21 +372,21 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (data.status === 'error') {
           clearInterval(polling);
           downloadButton.disabled = false;
-          hide(progressCard);
+          backToCard();
           activeDownloadId = null;
           showError(data.error || 'Erreur pendant le téléchargement.');
           YTPersist.clear(DOWNLOAD_KEY);
         } else if (data.status === 'cancelled') {
           clearInterval(polling);
           downloadButton.disabled = false;
-          hide(progressCard);
+          backToCard();
           activeDownloadId = null;
           YTPersist.clear(DOWNLOAD_KEY);
         }
       } catch (error) {
         clearInterval(polling);
         downloadButton.disabled = false;
-        hide(progressCard);
+        backToCard();
         activeDownloadId = null;
         showError(error.message || 'Serveur inaccessible.');
         YTPersist.clear(DOWNLOAD_KEY);
@@ -397,7 +399,7 @@ document.addEventListener('DOMContentLoaded', () => {
     progressCancelBtn.disabled = true;
     await window.DLQueue.cancelById(activeDownloadId);
     clearInterval(polling);
-    hide(progressCard);
+    backToCard();
     downloadButton.disabled = false;
     YTPersist.clear(DOWNLOAD_KEY);
     activeDownloadId = null;
@@ -451,6 +453,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function show(element) { element.classList.remove('hidden'); }
+  // Après une erreur ou une annulation on revient à la fiche (réglages
+  // intacts) au lieu d'une page vide à ré-analyser.
+  function backToCard() {
+    hide(progressCard);
+    if (deemixData) show(card);
+  }
   function hide(element) { element.classList.add('hidden'); }
 
   // ── Bouton retour : visible dès qu'une carte résultat/progression/terminé
@@ -466,6 +474,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   backBtn.addEventListener('click', () => {
     clearInterval(polling);
+    YTPersist.clear(CARD_KEY);
+    YTPersist.clear(SEL_KEY);
+    deemixData = null;
     hide(card);
     hide(progressCard);
     hide(doneCard);
@@ -478,7 +489,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Recherche restaurée uniquement lors d'un retour arrière du navigateur
   // (pas sur un simple rechargement ni une arrivée directe sur la page) ──
   function restoreSearchState() {
-    if (!YTPersist.isBackForward()) return;
     const state = YTPersist.load(STATE_KEY);
     if (!state || !state.results) return;
 
@@ -493,7 +503,60 @@ document.addEventListener('DOMContentLoaded', () => {
     renderSearchResults(latestSearchResults);
   }
 
+  function savePrefs() {
+    const toggles = {};
+    document.querySelectorAll('#deemix-settings-panel input[type="checkbox"]').forEach((box) => { toggles[box.id] = box.checked; });
+    YTPersist.save(PREFS_KEY, {
+      quality: selectedQuality, toggles,
+      concurrency: document.getElementById('deemix-setting-concurrency').value,
+      advancedOpen: document.getElementById('deemix-advanced').open,
+    });
+  }
+
+  function restorePrefs() {
+    const p = YTPersist.load(PREFS_KEY);
+    if (!p) return;
+    Object.entries(p.toggles || {}).forEach(([id, value]) => {
+      const box = document.getElementById(id);
+      if (box) box.checked = !!value;
+    });
+    const concurrency = document.getElementById('deemix-setting-concurrency');
+    if (p.concurrency && Array.from(concurrency.options).some((o) => o.value === String(p.concurrency))) concurrency.value = String(p.concurrency);
+    if (p.advancedOpen) document.getElementById('deemix-advanced').open = true;
+    const q = Array.from(document.querySelectorAll('#deemix-quality-tabs .q-btn')).find((b) => b.dataset.quality === p.quality);
+    if (q && !q.classList.contains('active')) q.click();
+  }
+
+  document.addEventListener('click', (event) => {
+    const el = event.target;
+    if (event.isTrusted && el && el.closest && el.closest('#deemix-quality-tabs')) savePrefs();
+  });
+  document.addEventListener('change', (event) => {
+    const el = event.target;
+    if (event.isTrusted && el && el.closest && el.closest('#deemix-settings-panel')) savePrefs();
+  });
+  document.getElementById('deemix-advanced').addEventListener('toggle', savePrefs);
+
+  function restoreCard() {
+    const saved = YTPersist.load(CARD_KEY);
+    if (!saved || !saved.data) return;
+    const selection = YTPersist.load(SEL_KEY);
+    deemixData = saved.data;
+    urlInput.value = saved.url || '';
+    renderMusic(saved.data);
+    if (selection && Array.isArray(selection.unchecked) && selection.unchecked.length) {
+      tracks.querySelectorAll('.track-check').forEach((box) => {
+        if (selection.unchecked.includes(Number(box.dataset.index))) box.checked = false;
+      });
+      updateSelection();
+    }
+    hide(searchResults);
+    show(card);
+  }
+
+  restorePrefs();
   restoreSearchState();
+  restoreCard();
 
   // ── Le téléchargement continue côté serveur même après un F5 : on retrouve
   // sa progression s'il tourne encore, sans rien afficher s'il est déjà fini

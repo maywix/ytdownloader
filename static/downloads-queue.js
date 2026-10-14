@@ -474,9 +474,10 @@
         return quickDownloadSpotify(url, meta);
       }
       const mode = info.type === 'playlist' ? 'playlist' : 'single';
+      const format = info.audio_only ? 'mp3' : 'best';
       const res = await fetch('/api/download', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, format: 'best', quality: '1080', mode }),
+        body: JSON.stringify({ url, format, quality: format === 'mp3' ? '320' : '1080', mode }),
       });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || 'Le téléchargement n’a pas pu démarrer.');

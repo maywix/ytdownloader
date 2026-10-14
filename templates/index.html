@@ -4,67 +4,66 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Eclypse Downloader</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
 
-  <div class="app">
+  <div class="app home-page">
 
-    <!-- ── En-tête ── -->
-    <header>
-      <div class="header-top">
-        <h1 class="logo">Eclypse<span class="logo-mode">Downloader</span></h1>
-        <div class="header-actions">
-          <div class="service-switch" id="service-switch">
-            <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
-              <span>Eclypse</span>
-              <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
-            </button>
-            <div class="service-menu hidden" id="service-menu">
-              <a class="service-item current" href="/"><strong>Eclypse</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
-              <a class="service-item" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
-              <a class="service-item" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
-            </div>
-          </div>
-          <div class="version-badge hidden" id="version-badge">
-            <span class="version-dot"></span>
-            <span id="v-text">yt-dlp</span>
-          </div>
-        </div>
+    <header class="home-header">
+      <div class="home-topbar">
+        <a class="home-brand" href="/" aria-label="Eclypse, accueil"><span class="brand-mark">◢</span><span>Eclypse</span><small>DOWNLOADER</small></a>
+        <nav class="primary-nav" aria-label="Services">
+          <a href="/" class="active" aria-current="page">Télécharger</a>
+          <a href="/spotify">SpotiFLAC</a>
+          <a href="/deemix">Deemix</a>
+        </nav>
       </div>
-      <p style="color: var(--muted2); font-size: 14px;">Téléchargez des vidéos 4K & des morceaux ou albums de musique en FLAC / MP3</p>
+      <div class="home-hero">
+        <div>
+          <p class="eyebrow">VOTRE ESPACE DE TÉLÉCHARGEMENT</p>
+          <h1>Vidéo ou musique,<br><span>à vous de choisir.</span></h1>
+          <p class="hero-description">Collez un lien ou recherchez un titre. Analysez le résultat, choisissez votre format, puis lancez le téléchargement.</p>
+        </div>
+        <div class="hero-sources" aria-label="Sources compatibles"><span>YouTube</span><span>SoundCloud</span><span>TikTok</span><span>et plus</span></div>
+      </div>
+      <div class="version-badge hidden" id="version-badge"><span class="version-dot"></span><span id="v-text">yt-dlp</span></div>
     </header>
 
     <main>
 
-      <!-- ── Onglets de Mode ── -->
-      <div class="mode-tabs" style="display: flex; gap: 8px; margin-bottom: 20px;">
-        <button class="mode-tab active" id="tab-url-btn" data-mode="url" style="padding: 10px 18px; border: 1px solid var(--border2); background: transparent; color: #fff; font-family: inherit; font-size: 13px; font-weight: 600; border-radius: 4px; cursor: pointer;">Lien vidéo / playlist / Spotify</button>
-        <button class="mode-tab" id="tab-search-btn" data-mode="search" style="padding: 10px 18px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-family: inherit; font-size: 13px; font-weight: 500; border-radius: 4px; cursor: pointer;">Recherche musique par mot-clé</button>
-      </div>
+      <div class="workspace-shell">
+        <div class="workspace-heading"><span class="step-number">01</span><div><p class="eyebrow">COMMENCER</p><h2>Que voulez-vous télécharger ?</h2></div></div>
+        <div class="mode-tabs" role="tablist" aria-label="Méthode de recherche">
+          <button class="mode-tab active" id="tab-url-btn" data-mode="url" role="tab" aria-controls="sec-url" aria-selected="true">J’ai un lien</button>
+          <button class="mode-tab" id="tab-search-btn" data-mode="search" role="tab" aria-controls="sec-search" aria-selected="false">Je cherche un titre</button>
+        </div>
+        <div class="workspace-grid"><div class="workspace-main">
 
       <!-- Mode 1 : URL (Vidéo / Playlist / Spotify Album / Track) -->
       <section id="sec-url" class="mode-sec">
+        <label class="field-label" for="url-input">Lien vidéo, morceau, album ou playlist</label>
         <div class="input-row">
-          <input type="text" id="url-input" placeholder="Colle un lien (YouTube, TikTok, Instagram, Spotify...) ou tape une recherche" autocomplete="off" spellcheck="false">
+          <input type="text" id="url-input" placeholder="https://youtube.com/watch?v=…" autocomplete="off" spellcheck="false">
           <button id="fetch-btn">
             <span id="btn-label">Analyser</span>
             <span id="btn-spinner" class="spinner hidden"></span>
           </button>
         </div>
 
-        <div id="url-search-results" class="results-grid hidden" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px;"></div>
+        <div id="url-search-results" class="results-grid hidden"></div>
 
         <div class="auto-dl-row">
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <label>
             <input type="checkbox" id="auto-dl-chk" data-auto-dl checked>
-            <span>Télécharger automatiquement à la fin</span>
+            <span>Enregistrer le fichier automatiquement quand il est prêt</span>
           </label>
         </div>
       </section>
 
       <!-- Mode 2 : Recherche de Musique par mot-clé -->
       <section id="sec-search" class="mode-sec hidden">
+        <label class="field-label" for="music-input">Titre, artiste ou groupe</label>
         <div class="input-row">
           <input type="text" id="music-input" placeholder="Rechercher par mot-clé (Titre, artiste, groupe)..." autocomplete="off">
           <button id="music-search-btn">
@@ -73,15 +72,17 @@
           </button>
         </div>
 
-        <div class="music-sources" style="display: flex; gap: 6px; margin: 12px 0 4px;">
-          <button class="src-chip active" data-src="youtube" style="padding: 6px 14px; border: 1px solid #fff; background: #fff; color: #000; font-size: 12px; font-weight: 600; border-radius: 3px; cursor: pointer;">YouTube</button>
-          <button class="src-chip" data-src="spotify" style="padding: 6px 14px; border: 1px solid var(--border2); background: transparent; color: var(--muted2); font-size: 12px; font-weight: 500; border-radius: 3px; cursor: pointer;">Spotify</button>
-          <button class="src-chip" data-src="soundcloud" style="padding: 6px 14px; border: 1px solid var(--border2); background: transparent; color: var(--muted2); font-size: 12px; font-weight: 500; border-radius: 3px; cursor: pointer;">SoundCloud</button>
+        <div class="music-sources" aria-label="Plateforme de recherche">
+          <button class="src-chip active" data-src="youtube" aria-pressed="true">YouTube</button>
+          <button class="src-chip" data-src="spotify" aria-pressed="false">Spotify</button>
+          <button class="src-chip" data-src="soundcloud" aria-pressed="false">SoundCloud</button>
         </div>
 
-        <div id="music-results" class="results-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 12px;"></div>
+        <div id="music-results" class="results-grid"></div>
         <div id="music-error" class="error hidden" style="margin-top: 12px;"></div>
       </section>
+        </div><aside class="workspace-aside"><p class="eyebrow">COMMENT ÇA MARCHE</p><ol><li><span>01</span><div><strong>Analysez</strong><p>Collez un lien ou choisissez un résultat.</p></div></li><li><span>02</span><div><strong>Réglez</strong><p>Sélectionnez le format et la qualité adaptés.</p></div></li><li><span>03</span><div><strong>Récupérez</strong><p>Suivez le traitement et sauvegardez le fichier.</p></div></li></ol><p class="aside-note">Pour la musique en haute qualité, passez par <a href="/spotify">SpotiFLAC</a> ou <a href="/deemix">Deemix</a>.</p></aside></div>
+      </div>
 
       <div id="error-msg" class="error hidden"></div>
 
@@ -91,13 +92,14 @@
       </button>
 
       <!-- CARTE VIDÉO UNIQUE -->
-      <div id="video-card" class="card hidden">
+      <div id="video-card" class="card result-card hidden">
         <div class="thumb-wrap">
           <img id="video-thumb" src="" alt="">
           <span id="video-duration" class="badge"></span>
           <button id="thumb-btn" class="thumb-btn">Miniature</button>
         </div>
         <div class="card-body">
+          <p class="eyebrow">RÉSULTAT ANALYSÉ</p>
           <div class="meta-top">
             <h2 id="video-title"></h2>
             <p class="meta-sub">
@@ -107,7 +109,8 @@
             </p>
           </div>
 
-          <div class="label">Format</div>
+          <div class="settings-divider"></div>
+          <div class="label">Format de sortie</div>
           <div class="fmt-tabs" id="fmt-tabs">
             <button class="fmt-tab" data-fmt="mp4">MP4</button>
             <button class="fmt-tab" data-fmt="mp3">MP3</button>
@@ -118,7 +121,7 @@
           </div>
 
           <div id="quality-section">
-            <div class="label">Qualité maximale</div>
+            <div class="label">Résolution vidéo maximale</div>
             <div class="q-grid" id="q-grid">
               <button class="q-btn active" data-q="1080">1080p</button>
               <button class="q-btn" data-q="720">720p</button>
@@ -127,23 +130,36 @@
             </div>
           </div>
 
+          <div id="audio-quality-section" class="hidden">
+            <div class="label">Débit MP3</div>
+            <div class="q-grid" id="audio-q-grid">
+              <button class="q-btn" data-q="128">128 kb/s</button>
+              <button class="q-btn" data-q="192">192 kb/s</button>
+              <button class="q-btn" data-q="256">256 kb/s</button>
+              <button class="q-btn active" data-q="320">320 kb/s</button>
+            </div>
+            <p class="quality-note">Le débit choisi règle l'encodage final ; il ne change pas la qualité de la source.</p>
+          </div>
+
           <button id="dl-btn" class="dl-btn">Télécharger</button>
         </div>
       </div>
 
       <!-- CARTE PLAYLIST -->
-      <div id="playlist-card" class="card hidden">
+      <div id="playlist-card" class="card result-card hidden">
         <div class="thumb-wrap">
           <img id="p-thumb" src="" alt="">
           <span id="p-count" class="badge badge-playlist">PLAYLIST</span>
         </div>
         <div class="card-body">
+          <p class="eyebrow">PLAYLIST OU CHAÎNE</p>
           <div class="meta-top">
             <h2 id="p-title"></h2>
             <p id="p-channel" class="meta-sub"></p>
           </div>
 
-          <div class="label">Format</div>
+          <div class="settings-divider"></div>
+          <div class="label">Format de sortie</div>
           <div class="fmt-tabs" id="p-fmt-tabs">
             <button class="fmt-tab active" data-fmt="mp4">MP4</button>
             <button class="fmt-tab" data-fmt="mp3">MP3</button>
@@ -151,12 +167,22 @@
           </div>
 
           <div id="p-quality-section">
-            <div class="label">Qualité maximale</div>
+            <div class="label">Résolution vidéo maximale</div>
             <div class="q-grid" id="p-q-grid">
               <button class="q-btn active" data-q="1080">1080p</button>
               <button class="q-btn" data-q="720">720p</button>
               <button class="q-btn" data-q="480">480p</button>
               <button class="q-btn" data-q="4k">4K</button>
+            </div>
+          </div>
+
+          <div id="p-audio-quality-section" class="hidden">
+            <div class="label">Débit MP3</div>
+            <div class="q-grid" id="p-audio-q-grid">
+              <button class="q-btn" data-q="128">128 kb/s</button>
+              <button class="q-btn" data-q="192">192 kb/s</button>
+              <button class="q-btn" data-q="256">256 kb/s</button>
+              <button class="q-btn active" data-q="320">320 kb/s</button>
             </div>
           </div>
 
@@ -225,24 +251,13 @@
 
     </main>
 
-    <!-- ── Services ── -->
-    <footer>
-      <p class="compat-label">Compatible avec</p>
-      <div class="services">
-        <div class="svc" title="Spotify"><span>Spotify</span></div>
-        <div class="svc" title="YouTube"><span>YouTube</span></div>
-        <div class="svc" title="TikTok"><span>TikTok</span></div>
-        <div class="svc" title="Instagram"><span>Instagram</span></div>
-        <div class="svc" title="SoundCloud"><span>SoundCloud</span></div>
-        <div class="svc" title="Facebook"><span>Facebook</span></div>
-      </div>
-    </footer>
+    <footer class="home-footer"><span>Eclypse Downloader</span><span>YouTube · SoundCloud · TikTok · Instagram · Facebook</span></footer>
 
   </div>
 
   <script src="/static/persist.js"></script>
   <script src="/static/nav.js"></script>
-  <script src="/static/downloads-queue.js?v=6"></script>
-  <script src="/static/app.js?v=5"></script>
+  <script src="/static/downloads-queue.js?v=7"></script>
+  <script src="/static/app.js?v=7"></script>
 </body>
 </html>

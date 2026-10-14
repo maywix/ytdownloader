@@ -35,6 +35,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const DOWNLOAD_KEY = 'spotiflac_download';
+  const CARD_KEY = 'spotiflac_card';
+  const SEL_KEY = 'spotiflac_selection';
+  const PREFS_KEY = 'spotiflac_prefs';
   let activeDownloadId = null;
 
   const previewAudio = new Audio();
@@ -231,6 +234,8 @@ document.addEventListener('DOMContentLoaded', () => {
     hide(card);
     hide(progressCard);
     hide(doneCard);
+    YTPersist.clear(CARD_KEY);
+    YTPersist.clear(SEL_KEY);
     setLoading(true);
 
     try {
@@ -240,12 +245,7 @@ document.addEventListener('DOMContentLoaded', () => {
       spotifyData = data;
       renderMusic(data);
       show(card);
-      // Un lien collé + Analyser est une intention explicite de télécharger ce
-      // titre précis ; un clic sur un résultat de recherche est exploratoire
-      // (on veut d'abord voir les pistes/réglages) — l'auto-download ne se
-      // déclenche donc que dans le premier cas (bug signalé : ça sautait
-      // direct au téléchargement dès un clic sur un résultat).
-      if (!fromSearch && autoDlChk.checked) downloadButton.click();
+      YTPersist.save(CARD_KEY, { url, data, origin: fromSearch === true });
     } catch (error) {
       showError(error.message || 'Serveur inaccessible.');
     } finally {
@@ -334,6 +334,7 @@ document.addEventListener('DOMContentLoaded', () => {
       downloadButton.textContent = 'Télécharger le morceau';
     }
     downloadButton.disabled = count === 0;
+    YTPersist.save(SEL_KEY, { unchecked: boxes.filter((box) => !box.checked).map((box) => Number(box.dataset.index)) });
   }
 
   async function searchMusic() {
@@ -463,7 +464,7 @@ document.addEventListener('DOMContentLoaded', () => {
       pollProgress(data.download_id);
     } catch (error) {
       window.DLQueue.fail(queueEntry, error.message || 'Serveur inaccessible.');
-      hide(progressCard);
+      backToCard();
       downloadButton.disabled = false;
       showError(error.message || 'Serveur inaccessible.');
     }
@@ -495,21 +496,21 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (data.status === 'error') {
           clearInterval(polling);
           downloadButton.disabled = false;
-          hide(progressCard);
+          backToCard();
           activeDownloadId = null;
           showError(data.error || 'Erreur pendant le téléchargement.');
           YTPersist.clear(DOWNLOAD_KEY);
         } else if (data.status === 'cancelled') {
           clearInterval(polling);
           downloadButton.disabled = false;
-          hide(progressCard);
+          backToCard();
           activeDownloadId = null;
           YTPersist.clear(DOWNLOAD_KEY);
         }
       } catch (error) {
         clearInterval(polling);
         downloadButton.disabled = false;
-        hide(progressCard);
+        backToCard();
         activeDownloadId = null;
         showError(error.message || 'Serveur inaccessible.');
         YTPersist.clear(DOWNLOAD_KEY);
@@ -522,7 +523,7 @@ document.addEventListener('DOMContentLoaded', () => {
     progressCancelBtn.disabled = true;
     await window.DLQueue.cancelById(activeDownloadId);
     clearInterval(polling);
-    hide(progressCard);
+    backToCard();
     downloadButton.disabled = false;
     YTPersist.clear(DOWNLOAD_KEY);
     activeDownloadId = null;
@@ -598,6 +599,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function show(element) { element.classList.remove('hidden'); }
+  // Après une erreur ou une annulation on revient à la fiche (réglages
+  // intacts) au lieu d'une page vide à ré-analyser.
+  function backToCard() {
+    hide(progressCard);
+    if (spotifyData) show(card);
+  }
   function hide(element) { element.classList.add('hidden'); }
 
   // ── Bouton retour : visible dès qu'une carte résultat/progression/terminé
@@ -613,6 +620,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   backBtn.addEventListener('click', () => {
     clearInterval(polling);
+    YTPersist.clear(CARD_KEY);
+    YTPersist.clear(SEL_KEY);
+    spotifyData = null;
     hide(card);
     hide(progressCard);
     hide(doneCard);
@@ -632,7 +642,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Recherche restaurée uniquement lors d'un retour arrière du navigateur
   // (pas sur un simple rechargement ni une arrivée directe sur la page) ──
   function restoreSearchState() {
-    if (paramUrl || !YTPersist.isBackForward()) return;
+    if (paramUrl) return;
     const state = YTPersist.load(STATE_KEY);
     if (!state || !state.results) return;
 
@@ -647,7 +657,85 @@ document.addEventListener('DOMContentLoaded', () => {
     renderSearchResults(latestSearchResults);
   }
 
+  function savePrefs() {
+    const buttons = Array.from(document.querySelectorAll('#spotify-source-tabs .fmt-tab'));
+    // Pendant l'Atmos, les sources sont verrouillées : on mémorise le choix de l'utilisateur, pas le verrou.
+    const flags = sourcesBeforeAtmos || buttons.map((b) => b.classList.contains('active'));
+    const sourcesOff = buttons
+      .filter((b, i) => !flags[i] && !(b.dataset.source === 'amazon-account' && !amazonAccountUsable))
+      .map((b) => b.dataset.source);
+    const toggles = {};
+    document.querySelectorAll('#spotify-settings-panel input[type="checkbox"]').forEach((box) => { toggles[box.id] = box.checked; });
+    YTPersist.save(PREFS_KEY, {
+      quality: selectedQuality, format: selectedFormat, bitrate: selectedBitrate, sourcesOff, toggles,
+      concurrency: document.getElementById('setting-concurrency').value,
+      advancedOpen: document.getElementById('spotify-advanced').open,
+    });
+  }
+
+  function restorePrefs() {
+    const p = YTPersist.load(PREFS_KEY);
+    if (!p) return;
+    const clickIf = (sel, key, val) => {
+      const el = Array.from(document.querySelectorAll(sel)).find((b) => b.dataset[key] === val);
+      if (el && !el.classList.contains('active')) el.click();
+    };
+    // Sources avant la qualité : le verrou Atmos photographie l'état des sources au moment du clic.
+    if (Array.isArray(p.sourcesOff)) {
+      const buttons = Array.from(document.querySelectorAll('#spotify-source-tabs .fmt-tab'));
+      const on = buttons.filter((b) => !p.sourcesOff.includes(b.dataset.source));
+      if (on.length) {
+        buttons.forEach((b) => {
+          const active = on.includes(b);
+          b.classList.toggle('active', active);
+          b.setAttribute('aria-pressed', String(active));
+        });
+        selectedSources = on.map((b) => b.dataset.source);
+      }
+    }
+    Object.entries(p.toggles || {}).forEach(([id, value]) => {
+      const box = document.getElementById(id);
+      if (box) box.checked = !!value;
+    });
+    const concurrency = document.getElementById('setting-concurrency');
+    if (p.concurrency && Array.from(concurrency.options).some((o) => o.value === String(p.concurrency))) concurrency.value = String(p.concurrency);
+    if (p.advancedOpen) document.getElementById('spotify-advanced').open = true;
+    clickIf('#spotify-format-tabs .fmt-tab', 'format', p.format);
+    clickIf('#spotify-bitrate-tabs .q-btn', 'bitrate', p.bitrate);
+    clickIf('#spotify-quality-tabs .q-btn', 'quality', p.quality);
+  }
+
+  document.addEventListener('click', (event) => {
+    const el = event.target;
+    if (event.isTrusted && el && el.closest && el.closest('#spotify-source-tabs, #spotify-quality-tabs, #spotify-format-tabs, #spotify-bitrate-tabs')) savePrefs();
+  });
+  document.addEventListener('change', (event) => {
+    const el = event.target;
+    if (event.isTrusted && el && el.closest && el.closest('#spotify-settings-panel')) savePrefs();
+  });
+  document.getElementById('spotify-advanced').addEventListener('toggle', savePrefs);
+
+  function restoreCard() {
+    if (paramUrl || false) return;
+    const saved = YTPersist.load(CARD_KEY);
+    if (!saved || !saved.data) return;
+    const selection = YTPersist.load(SEL_KEY);
+    spotifyData = saved.data;
+    urlInput.value = saved.url || '';
+    renderMusic(saved.data);
+    if (selection && Array.isArray(selection.unchecked) && selection.unchecked.length) {
+      tracks.querySelectorAll('.track-check').forEach((box) => {
+        if (selection.unchecked.includes(Number(box.dataset.index))) box.checked = false;
+      });
+      updateSelection();
+    }
+    hide(searchResults);
+    show(card);
+  }
+
+  restorePrefs();
   restoreSearchState();
+  restoreCard();
 
   // ── Le téléchargement continue côté serveur même après un F5 : on retrouve
   // sa progression s'il tourne encore, sans rien afficher s'il est déjà fini

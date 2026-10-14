@@ -4,36 +4,22 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Deemix — Eclypse Downloader</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
-  <div class="app">
-    <header>
-      <div class="header-top">
-        <h1 class="logo">Eclypse<span class="logo-mode">Deemix</span> <span class="beta-badge">BÊTA</span></h1>
-        <div class="header-actions">
-          <div class="service-switch" id="service-switch">
-            <button type="button" class="service-switch-btn" id="service-switch-btn" aria-haspopup="true" aria-expanded="false">
-              <span>Deemix</span>
-              <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
-            </button>
-            <div class="service-menu hidden" id="service-menu">
-              <a class="service-item" href="/"><strong>Eclypse</strong><span>Vidéos YouTube, musique générale — FLAC/MP3</span></a>
-              <a class="service-item" href="/spotify"><strong>SpotiFLAC</strong><span>Qualité maximale — Hi-Res, sources multiples (Tidal, Qobuz, Amazon...). Plus lent.</span></a>
-              <a class="service-item current" href="/deemix"><strong>Deemix</strong><span>Le plus rapide — Deezer uniquement, jusqu'au lossless CD (bêta)</span></a>
-            </div>
-          </div>
-          <div class="version-badge hidden" id="deemix-version-badge">
-            <span class="version-dot"></span>
-            <span id="deemix-v-text">deemix</span>
-          </div>
-        </div>
+  <div class="app service-page">
+    <header class="service-header">
+      <div class="home-topbar">
+        <a class="home-brand" href="/" aria-label="Eclypse, accueil"><span class="brand-mark">◢</span><span>Eclypse</span><small>DOWNLOADER</small></a>
+        <nav class="primary-nav" aria-label="Services"><a href="/">Télécharger</a><a href="/spotify">SpotiFLAC</a><a class="active" href="/deemix" aria-current="page">Deemix</a></nav>
       </div>
-      <p class="tagline">Téléchargez de la musique en qualité CD (FLAC lossless) depuis Deezer, via un lien Deezer direct ou un lien Spotify. Nécessite qu'un administrateur ait configuré un ARL Deezer valide.</p>
+      <div class="service-intro"><p class="eyebrow">MUSIQUE · DEEZER</p><h1>Deemix <span class="beta-badge">BÊTA</span></h1><p class="tagline">Cherchez un titre ou analysez un lien Deezer ou Spotify, puis choisissez FLAC ou MP3. Un ARL Deezer valide doit être configuré par l’administrateur.</p></div>
+      <div class="version-badge hidden" id="deemix-version-badge"><span class="version-dot"></span><span id="deemix-v-text">deemix</span></div>
     </header>
 
     <main>
-      <section>
+      <section class="service-entry">
+        <p class="eyebrow">01 · LIEN DIRECT</p><h2>Analyser un lien</h2>
         <div class="input-row">
           <input id="deemix-url" type="url" placeholder="https://www.deezer.com/... ou https://open.spotify.com/..." autocomplete="off" spellcheck="false">
           <button id="deemix-analyse-btn">
@@ -43,7 +29,8 @@
         </div>
       </section>
 
-      <section>
+      <section class="service-entry">
+        <p class="eyebrow">02 · RECHERCHE</p><h2>Trouver un titre</h2>
         <div class="input-row">
           <input id="deemix-search" type="search" placeholder="Rechercher un titre ou un artiste" autocomplete="off">
           <button id="deemix-search-btn">
@@ -53,7 +40,7 @@
         </div>
         <label class="auto-dl-row">
           <input type="checkbox" id="deemix-auto-dl" data-auto-dl checked>
-          <span>Télécharger automatiquement à la fin</span>
+          <span>Enregistrer le fichier automatiquement quand il est prêt</span>
         </label>
         <div class="fmt-tabs" id="deemix-search-filters">
           <button type="button" class="fmt-tab active" data-filter="all">Tout</button>
@@ -166,7 +153,7 @@
   </div>
   <script src="/static/persist.js"></script>
   <script src="/static/nav.js"></script>
-  <script src="/static/downloads-queue.js?v=5"></script>
-  <script src="/static/deemix.js?v=8"></script>
+  <script src="/static/downloads-queue.js?v=7"></script>
+  <script src="/static/deemix.js?v=9"></script>
 </body>
 </html>
